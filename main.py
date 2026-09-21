@@ -1099,6 +1099,10 @@ def handle_ai_text(message):
 
 # --- ISHGA TUSHIRISH ---
 if __name__ == "__main__":
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
     Thread(target=run_web, daemon=True).start()
     Thread(target=reminder_scheduler, daemon=True).start()
     print("80-maktab 'Ustoz AI' to'liq boshqaruv tizimi ishga tushdi...")
