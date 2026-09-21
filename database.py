@@ -35,6 +35,16 @@ def init_db():
         )
     """)
     
+    # Mavjud jadvalga yangi ustunlarni avtomatik qo'shish (migratsiya)
+    cursor.execute("PRAGMA table_info(users)")
+    cols = [col[1] for col in cursor.fetchall()]
+    if "last_active" not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_active TEXT")
+    if "registered_at" not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
+    if "role" not in cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'student'")
+    
     # Tasdiqlashni kutayotgan o'qituvchilar so'rovlari
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_requests (
@@ -59,7 +69,7 @@ def init_db():
         )
     """)
 
-    # O'quvchilar va ota-onalar sinf obunalari (1 kishi bir nechta sinfga ulanishi mumkin)
+    # O'quvchilar va ota-onalar sinf obunalari
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS student_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +80,7 @@ def init_db():
         )
     """)
 
-    # Ommaviy xabarlar tarixi va adashib ketganda o'chirish (Recall) xotirasi
+    # Ommaviy xabarlar tarixi va adashganda o'chirish (Recall) xotirasi
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS broadcast_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +102,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Foydalanuvchi faolligini qayd qilish
 def update_activity(telegram_id, full_name=""):
     conn = get_db()
     now_str = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -149,7 +158,6 @@ def get_all_admins():
     conn.close()
     return [a["telegram_id"] for a in admins]
 
-# So'rovlar
 def create_pending_request(telegram_id, phone, full_name, teacher_name):
     conn = get_db()
     now_str = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -198,7 +206,6 @@ def reject_request(req_id):
     conn.commit()
     conn.close()
 
-# Sinf obunalari (O'quvchilar va Ota-onalar)
 def add_class_subscription(telegram_id, class_name):
     conn = get_db()
     now_str = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -236,7 +243,6 @@ def get_all_active_subscriptions():
         subs[tid].append(r["class_name"])
     return subs
 
-# Xabarlar tarixi va O'chirish (Recall)
 def save_broadcast(sender_id, target_group, message_text, sent_pairs):
     conn = get_db()
     now_str = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -266,7 +272,6 @@ def delete_broadcast_records(broadcast_id):
     conn.commit()
     conn.close()
 
-# Jonli statistika va Infografika
 def get_system_stats():
     conn = get_db()
     today_prefix = datetime.now(UZ_TZ).strftime("%Y-%m-%d")
@@ -300,7 +305,6 @@ def get_system_stats():
         "top_classes": [dict(tc) for tc in top_classes]
     }
 
-# O'qituvchilar JSON ma'lumotlari
 def get_teachers_list():
     if not os.path.exists(JSON_PATH):
         return []
