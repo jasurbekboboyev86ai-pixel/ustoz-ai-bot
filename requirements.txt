@@ -1,3 +1,4 @@
 pyTelegramBotAPI
+flask
+openpyxl
 google-generativeai
-Flask
