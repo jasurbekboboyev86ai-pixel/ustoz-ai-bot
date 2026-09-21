@@ -29,14 +29,16 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Gemini AI konfiguratsiyasi
+# Gemini AI konfiguratsiyasi (Barqaror 1.5-flash modeli)
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 ai_model = None
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        ai_model = genai.GenerativeModel("gemini-2.5-flash")
-    except Exception:
+        ai_model = genai.GenerativeModel("gemini-1.5-flash")
+        print("✅ Gemini AI (gemini-1.5-flash) muvaffaqiyatli ulandi!")
+    except Exception as e:
+        print(f"❌ Gemini AI ulanish xatosi: {e}")
         ai_model = None
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or config.BOT_TOKEN
@@ -813,10 +815,10 @@ def handle_admin_total_report(message):
 def handle_ai_prompt(message):
     bot.send_message(
         message.chat.id,
-        "💡 <b>Ustoz AI — Aqlli pedagogik yordamchi:</b>\n\n"
-        "Fanni va mavzuni yozing. Masalan:\n"
-        "• <i>«7-sinf Informatika: Algoritm mavzusida 1 soatlik dars ishlanmasi»</i>\n"
-        "• <i>«5-sinf Musiqa: 5 talik qiziqarli test tuzib ber»</i>\n\n"
+        "💡 <b>Ustoz AI — Aqlli pedagogik yordamchi ishga tushdi!</b>\n\n"
+        "Istalgan savolingiz, fanni va dars mavzusini yozing. Masalan:\n"
+        "• <i>«7-sinf Fizika: Bosim mavzusida qiziqarli dars ishlanmasi tuzib ber»</i>\n"
+        "• <i>«5-sinf Musiqa: 5 talik qiziqarli test savollari tuzib ber»</i>\n\n"
         "Savolingizni shu yerga yozib yuboring:"
     )
 
@@ -926,17 +928,26 @@ def handle_test_reminder(message):
     tc, pc = send_all_daily_reminders()
     bot.send_message(message.chat.id, f"✅ Eslatma yuborildi:\n• O'qituvchilarga: <b>{tc} nafar</b>\n• Ota-onalar/O'quvchilarga: <b>{pc} oilaga</b>")
 
-# Umumiy matnlarga AI javobi
+# Umumiy savollarga AI orqali javob berish
 @bot.message_handler(func=lambda msg: True)
 def handle_ai_text(message):
     database.update_activity(message.from_user.id, message.from_user.first_name)
     if ai_model:
         try:
-            res = ai_model.generate_content(message.text)
-            bot.reply_to(message, res.text)
+            bot.send_chat_action(message.chat.id, 'typing')
+            prompt = (
+                "Sen O'zbekistondagi 80-umumiy o'rta ta'lim maktabining aqlli pedagogik AI yordamchisisan. "
+                "O'qituvchilar, o'quvchilar va ota-onalarning savollariga o'zbek tilida, muloyim, aniq va professional darajada javob ber.\n\n"
+                f"Savol: {message.text}"
+            )
+            res = ai_model.generate_content(prompt)
+            if res and res.text:
+                bot.reply_to(message, res.text)
+                return
+        except Exception as err:
+            bot.reply_to(message, f"⚠️ AI javob berishda xatolik yuz berdi: {err}")
             return
-        except Exception:
-            pass
+            
     bot.reply_to(message, "Iltimos, quyidagi menyu tugmalaridan foydalaning:", reply_markup=get_student_keyboard())
 
 # --- ISHGA TUSHIRISH ---
