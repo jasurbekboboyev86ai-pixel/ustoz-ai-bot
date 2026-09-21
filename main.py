@@ -60,9 +60,12 @@ def get_admin_keyboard():
     b4 = types.KeyboardButton("📢 Ommaviy xabar yuborish")
     b5 = types.KeyboardButton("📅 Mening darslarim")
     b6 = types.KeyboardButton("⏰ Haftalik yuklamam")
+    b7 = types.KeyboardButton("👨‍💻 Tuzuvchi")
+    b8 = types.KeyboardButton("✍️ Talab va takliflar")
     markup.add(b1, b2)
     markup.add(b3, b4)
     markup.add(b5, b6)
+    markup.add(b7, b8)
     return markup
 
 def get_teacher_keyboard():
@@ -71,8 +74,11 @@ def get_teacher_keyboard():
     b2 = types.KeyboardButton("⏰ Haftalik yuklamam")
     b3 = types.KeyboardButton("🎨 To'garaklarim")
     b4 = types.KeyboardButton("✏️ Dars kunini to'g'irlash")
+    b5 = types.KeyboardButton("👨‍💻 Tuzuvchi")
+    b6 = types.KeyboardButton("✍️ Talab va takliflar")
     markup.add(b1, b2)
     markup.add(b3, b4)
+    markup.add(b5, b6)
     return markup
 
 def get_days_inline_keyboard(prefix="day_view"):
@@ -171,6 +177,60 @@ def handle_contact(message):
         f"✅ <b>Telefon raqamingiz qabul qilindi:</b> <code>{phone}</code>\n\n"
         f"Iltimos, quyidagi ro'yxatdan <b>o'z ism-familiyangizni tanlang</b>:",
         reply_markup=get_teachers_page_inline(page=0)
+    )
+
+# --- TUZUVCHI VA TALAB-TAKLIFLAR BO'LIMI ---
+
+@bot.message_handler(func=lambda msg: msg.text == "👨‍💻 Tuzuvchi")
+def handle_developer_info(message):
+    dev_text = (
+        "👨‍💻 <b>Loyiha muallifi va dasturchi:</b> Boboev Jasurbek\n"
+        "🏫 <b>Muassasa:</b> 80-umumiy o‘rta ta'lim maktabi\n"
+        "🤖 <b>Tizim:</b> «Ustoz AI» (Dars jadvallari va sun’iy intellekt integratsiyasi)\n\n"
+        "<i>Ushbu bot maktab pedagog jamoasiga dars jadvallari, yuklamalar va to‘garaklarni "
+        "qulay monitoring qilish hamda metodik yordam olish uchun ishlab chiqildi.</i>"
+    )
+    bot.send_message(message.chat.id, dev_text)
+
+@bot.message_handler(func=lambda msg: msg.text == "✍️ Talab va takliflar")
+def handle_feedback_prompt(message):
+    USER_STATES[message.from_user.id] = {"action": "feedback"}
+    bot.send_message(
+        message.chat.id,
+        "✍️ <b>Talab va takliflar bo‘limi:</b>\n\n"
+        "Bot faoliyatini takomillashtirish bo‘yicha o‘z taklif yoki fikrlaringizni bitta xabar shaklida yozib yuboring.\n"
+        "Xabaringiz bevosita maktab ma'muriyatiga (Bosh Adminga) yetkaziladi.\n\n"
+        "<i>Bekor qilish uchun: /cancel</i>"
+    )
+
+@bot.message_handler(func=lambda msg: msg.from_user.id in USER_STATES and USER_STATES[msg.from_user.id].get("action") == "feedback")
+def handle_feedback_text(message):
+    uid = message.from_user.id
+    del USER_STATES[uid]
+    user = database.get_user(uid)
+    sender_name = user["teacher_name"] if (user and user.get("teacher_name")) else (user["full_name"] if user else message.from_user.first_name)
+    phone = user["phone"] if (user and user.get("phone")) else "Aniqlanmadi"
+    username = f"@{message.from_user.username}" if message.from_user.username else "mavjud emas"
+
+    admin_notice = (
+        f"📩 <b>YANGI TALAB VA TAKLIF!</b>\n\n"
+        f"👤 <b>Yuboruvchi:</b> {sender_name}\n"
+        f"📱 <b>Telefon:</b> <code>{phone}</code>\n"
+        f"💬 <b>Telegram profil:</b> {username}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📝 <b>Taklif mazmuni:</b>\n{message.text}"
+    )
+
+    admins = database.get_all_admins()
+    for a_id in admins:
+        try:
+            bot.send_message(a_id, admin_notice)
+        except Exception:
+            pass
+
+    bot.send_message(
+        message.chat.id,
+        "✅ <b>Rahmat!</b> Sizning talab va taklifingiz qabul qilindi hamda Bosh Adminga yetkazildi."
     )
 
 # --- O'QITUVCHI TANLASH VA CALLBACKLAR ---
