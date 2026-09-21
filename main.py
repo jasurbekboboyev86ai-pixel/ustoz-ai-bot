@@ -29,18 +29,84 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Gemini AI konfiguratsiyasi (Barqaror 1.5-flash modeli)
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+# --- GEMINI AI AVTOMATIK MODEL TANLASH TIZIMI ---
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY") or getattr(config, "GEMINI_API_KEY", "")
 ai_model = None
-if GEMINI_KEY:
+active_model_name = None
+
+def get_ai_model():
+    global ai_model, active_model_name
+    if ai_model is not None:
+        return ai_model
+    if not GEMINI_KEY:
+        return None
     try:
         genai.configure(api_key=GEMINI_KEY)
-        ai_model = genai.GenerativeModel("gemini-1.5-flash")
-        print("✅ Gemini AI (gemini-1.5-flash) muvaffaqiyatli ulandi!")
+        # API kalitga tegishli barcha modellar ro'yxatini olish
+        supported = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        
+        # Eng ustuvor va barqaror yangi modellar tartibi
+        priority = [
+            "models/gemini-2.5-flash",
+            "models/gemini-2.0-flash",
+            "models/gemini-flash-latest",
+            "models/gemini-2.5-pro",
+            "models/gemini-pro"
+        ]
+        chosen = None
+        for p in priority:
+            if p in supported:
+                chosen = p
+                break
+        
+        if not chosen and supported:
+            chosen = supported[0]
+            
+        active_model_name = chosen or "gemini-2.5-flash"
+        ai_model = genai.GenerativeModel(active_model_name)
+        print(f"✅ Gemini AI faollashtirildi! Tanlangan model: {active_model_name}")
+        return ai_model
     except Exception as e:
-        print(f"❌ Gemini AI ulanish xatosi: {e}")
-        ai_model = None
+        print(f"❌ Gemini AI model aniqlashda xatolik: {e}")
+        return None
 
+def generate_ai_response(prompt_text):
+    global ai_model, active_model_name
+    if not GEMINI_KEY:
+        return None, "API kalit (GEMINI_API_KEY) o'rnatilmagan"
+    
+    model = get_ai_model()
+    if not model:
+        return None, "Google AI tizimiga ulanib bo'lmadi"
+    
+    try:
+        res = model.generate_content(prompt_text)
+        if res and res.text:
+            return res.text, None
+    except Exception as err:
+        # Agar tanlangan model 404 bersa, boshqa ochiq modellardan birini qidirib ko'radi
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods and m.name != active_model_name:
+                    try:
+                        backup_model = genai.GenerativeModel(m.name)
+                        res = backup_model.generate_content(prompt_text)
+                        if res and res.text:
+                            ai_model = backup_model
+                            active_model_name = m.name
+                            return res.text, None
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None, str(err)
+    
+    return None, "AI bo'sh javob qaytardi"
+
+# Telegram bot sozlamasi
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or config.BOT_TOKEN
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
@@ -778,6 +844,53 @@ def handle_teacher_clubs(message):
         text += f"{idx}. <b>{tg['name']}</b> ({tg['subject']})\n   • Kuni: {tg['day']} | Vaqti: {tg['time']}\n\n"
     bot.send_message(message.chat.id, text)
 
+@bot.message_handler(func=lambda msg: msg.text == "✏️ Dars kunini to'g'irlash")
+def handle_edit_day_prompt(message):
+    user = database.get_user(message.from_user.id)
+    if not user:
+        return
+    bot.send_message(
+        message.chat.id,
+        "✏️ Qaysi kungi darsingizni to'g'irlamoqchisiz?",
+        reply_markup=get_days_inline_keyboard("edit_day")
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_day_"))
+def handle_edit_day_callback(call):
+    day = call.data.replace("edit_day_", "")
+    user = database.get_user(call.from_user.id)
+    if not user:
+        return
+    USER_STATES[call.from_user.id] = {"editing_day": day}
+    msg_text = (
+        f"✏️ <b>{day} kungi darsni to'g'irlash:</b>\n\n"
+        f"Iltimos, dars raqami va yangi sinfni yozing.\n"
+        f"<i>Masalan:</i> <code>2-dars 5A</code> yoki bo'sh qoldirish uchun: <code>2-dars -</code>"
+    )
+    bot.send_message(call.message.chat.id, msg_text)
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda msg: msg.from_user.id in USER_STATES and "editing_day" in USER_STATES[msg.from_user.id])
+def process_day_edit_text(message):
+    uid = message.from_user.id
+    user = database.get_user(uid)
+    day = USER_STATES[uid]["editing_day"]
+    text = message.text.strip()
+    m = re.search(r"(\d+)\s*(?:-dars)?\s*([A-Za-z0-9,\s\-]+)", text)
+    if m:
+        slot_num = int(m.group(1))
+        cls_val = m.group(2).strip().upper()
+        database.set_override(user["teacher_name"], day, slot_num, cls_val)
+        del USER_STATES[uid]["editing_day"]
+        bot.send_message(
+            message.chat.id,
+            f"✅ <b>Dars muvaffaqiyatli to'g'irlandi!</b>\n\n📅 Kun: {day}\n⏰ Dars: {slot_num}-dars\n🏫 Yangi sinf: <b>{cls_val}</b>"
+        )
+    else:
+        bot.send_message(message.chat.id, "❌ Noto'g'ri format. Masalan: <code>2-dars 5A</code>")
+
+# --- ADMIN BUYRUQLARI ---
+
 @bot.message_handler(func=lambda msg: msg.text == "👥 O'qituvchilar holati")
 def handle_admin_teachers_state(message):
     admin = database.get_user(message.from_user.id)
@@ -809,18 +922,52 @@ def handle_admin_total_report(message):
     )
     bot.send_message(message.chat.id, text)
 
+@bot.message_handler(func=lambda msg: msg.text == "📥 Excel jadval yuklash")
+def handle_excel_prompt(message):
+    admin = database.get_user(message.from_user.id)
+    if not admin or admin["role"] != "admin":
+        return
+    bot.send_message(message.chat.id, "📥 Yangi dars jadvali Excel faylini (.xlsx) shu yerga fayl ko'rinishida yuboring.")
+
+@bot.message_handler(content_types=['document'])
+def handle_document_upload(message):
+    admin = database.get_user(message.from_user.id)
+    if not admin or admin["role"] != "admin":
+        return
+    doc = message.document
+    if not doc.file_name.endswith(('.xlsx', '.xls')):
+        bot.send_message(message.chat.id, "Iltimos, faqat Excel (.xlsx) fayl yuboring.")
+        return
+    msg_wait = bot.send_message(message.chat.id, "⏳ Fayl qabul qilindi va bazaga saqlanmoqda...")
+    try:
+        file_info = bot.get_file(doc.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        save_path = os.path.join(os.path.dirname(__file__), "uploaded_schedule.xlsx")
+        with open(save_path, 'wb') as f:
+            f.write(downloaded)
+        bot.edit_message_text(f"✅ Fayl <code>{doc.file_name}</code> muvaffaqiyatli yangilandi!", message.chat.id, msg_wait.message_id)
+    except Exception as err:
+        bot.edit_message_text(f"❌ Xatolik: {err}", message.chat.id, msg_wait.message_id)
+
 # --- AI METODIK YORDAMCHI TUGMASI ---
 
 @bot.message_handler(func=lambda msg: msg.text in ["💡 Metodik AI yordamchi", "💡 Savol-javob (AI)"])
 def handle_ai_prompt(message):
+    USER_STATES[message.from_user.id] = {"action": "ai_query"}
     bot.send_message(
         message.chat.id,
-        "💡 <b>Ustoz AI — Aqlli pedagogik yordamchi ishga tushdi!</b>\n\n"
-        "Istalgan savolingiz, fanni va dars mavzusini yozing. Masalan:\n"
+        "💡 <b>Ustoz AI — Aqlli pedagogik yordamchi faol!</b>\n\n"
+        "Fanni va dars mavzusini yozing. Masalan:\n"
         "• <i>«7-sinf Fizika: Bosim mavzusida qiziqarli dars ishlanmasi tuzib ber»</i>\n"
         "• <i>«5-sinf Musiqa: 5 talik qiziqarli test savollari tuzib ber»</i>\n\n"
         "Savolingizni shu yerga yozib yuboring:"
     )
+
+@bot.message_handler(commands=['cancel'])
+def handle_cancel_cmd(message):
+    if message.from_user.id in USER_STATES:
+        del USER_STATES[message.from_user.id]
+    bot.send_message(message.chat.id, "Amal bekor qilindi.", reply_markup=get_student_keyboard())
 
 @bot.message_handler(func=lambda msg: msg.text in ["✍️ Talab va takliflar", "✍️ Taklif bildirish"])
 def handle_feedback_request(message):
@@ -887,7 +1034,7 @@ def send_all_daily_reminders(target_day=None):
         except Exception:
             pass
 
-    # 2. Ota-onalar va o'quvchilarga (bir nechta sinfni bitta xabarga jamlab) yuborish
+    # 2. Ota-onalar va o'quvchilarga bitta xabarda yuborish
     subs = database.get_all_active_subscriptions()
     p_count = 0
     for chat_id, class_list in subs.items():
@@ -928,27 +1075,27 @@ def handle_test_reminder(message):
     tc, pc = send_all_daily_reminders()
     bot.send_message(message.chat.id, f"✅ Eslatma yuborildi:\n• O'qituvchilarga: <b>{tc} nafar</b>\n• Ota-onalar/O'quvchilarga: <b>{pc} oilaga</b>")
 
-# Umumiy savollarga AI orqali javob berish
+# --- UMUMIY MATNLAR VA SAVOLLARGA AI JAVOBI ---
 @bot.message_handler(func=lambda msg: True)
 def handle_ai_text(message):
-    database.update_activity(message.from_user.id, message.from_user.first_name)
-    if ai_model:
-        try:
-            bot.send_chat_action(message.chat.id, 'typing')
-            prompt = (
-                "Sen O'zbekistondagi 80-umumiy o'rta ta'lim maktabining aqlli pedagogik AI yordamchisisan. "
-                "O'qituvchilar, o'quvchilar va ota-onalarning savollariga o'zbek tilida, muloyim, aniq va professional darajada javob ber.\n\n"
-                f"Savol: {message.text}"
-            )
-            res = ai_model.generate_content(prompt)
-            if res and res.text:
-                bot.reply_to(message, res.text)
-                return
-        except Exception as err:
-            bot.reply_to(message, f"⚠️ AI javob berishda xatolik yuz berdi: {err}")
-            return
-            
-    bot.reply_to(message, "Iltimos, quyidagi menyu tugmalaridan foydalaning:", reply_markup=get_student_keyboard())
+    uid = message.from_user.id
+    database.update_activity(uid, message.from_user.first_name)
+    
+    bot.send_chat_action(message.chat.id, 'typing')
+    prompt = (
+        "Sen O'zbekistondagi 80-umumiy o'rta ta'lim maktabining aqlli pedagogik AI yordamchisisan. "
+        "O'qituvchilar, o'quvchilar va ota-onalarning savollariga o'zbek tilida, muloyim, aniq va professional darajada javob ber.\n\n"
+        f"Savol: {message.text}"
+    )
+    answer, err = generate_ai_response(prompt)
+    if answer:
+        bot.reply_to(message, answer)
+    else:
+        bot.reply_to(
+            message,
+            f"⚠️ AI javob berishda xatolik yuz berdi: {err}\n\nIltimos, menyu tugmalaridan foydalaning:",
+            reply_markup=get_student_keyboard()
+        )
 
 # --- ISHGA TUSHIRISH ---
 if __name__ == "__main__":
