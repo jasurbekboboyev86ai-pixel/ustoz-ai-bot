@@ -39,43 +39,95 @@ GEMINI_KEY = (
     or getattr(config, "GEMINI_API_KEY", "")
 )
 
-def generate_ai_response(prompt_text):
+cached_model = None
+
+def get_working_ai_model():
+    """Google API'dan mavjud modellarni avtomatik aniqlab ulaydi"""
+    global cached_model
+    if cached_model is not None:
+        return cached_model
+        
     if not GEMINI_KEY:
-        return None, "API kalit (GEMINI_API_KEY) topilmadi. Render sozlamalarini tekshiring."
-    
+        return None
+        
     try:
         genai.configure(api_key=GEMINI_KEY)
+        available = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        
+        if not available:
+            return None
+            
+        priority = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-flash-latest",
+            "gemini-pro"
+        ]
+        
+        chosen = None
+        for p in priority:
+            for a in available:
+                if p in a:
+                    chosen = a
+                    break
+            if chosen:
+                break
+                
+        chosen_name = chosen or available[0]
+        cached_model = genai.GenerativeModel(
+            chosen_name,
+            generation_config={"temperature": 0.85, "top_p": 0.95}
+        )
+        print(f"✅ Gemini AI muvaffaqiyatli ulandi! Model: {chosen_name}")
+        return cached_model
     except Exception as e:
-        return None, f"Sozlash xatosi: {e}"
+        print(f"AI Model ulashda xatolik: {e}")
+        return None
 
-    models_to_try = [
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.5-flash",
-        "gemini-1.5-pro",
-        "gemini-pro"
-    ]
-    
-    errors = []
-    for mod_name in models_to_try:
+def generate_ai_response(prompt_text):
+    """Xatoliklarga chidamli AI javob qaytarish tizimi"""
+    global cached_model
+    if not GEMINI_KEY:
+        return None, "API kalit (GEMINI_API_KEY) topilmadi. Render sozlamalarini tekshiring."
+        
+    model = get_working_ai_model()
+    if not model:
+        return None, "Google AI bilan aloqa o'rnatib bo'lmadi."
+        
+    try:
+        res = model.generate_content(prompt_text)
+        if res:
+            text = ""
+            try:
+                text = res.text
+            except Exception:
+                if res.candidates and res.candidates[0].content.parts:
+                    text = res.candidates[0].content.parts[0].text
+            if text and text.strip():
+                return text.strip(), None
+    except Exception as err:
+        cached_model = None
         try:
-            m = genai.GenerativeModel(mod_name)
-            res = m.generate_content(prompt_text)
-            if res:
-                text = ""
-                try:
-                    text = res.text
-                except Exception:
-                    if res.candidates and res.candidates[0].content.parts:
-                        text = res.candidates[0].content.parts[0].text
-                if text and text.strip():
-                    return text.strip(), None
-        except Exception as err:
-            errors.append(f"{mod_name}: {err}")
-            continue
-
-    err_msg = errors[0] if errors else "AI javob qaytara olmadi"
-    return None, err_msg
+            genai.configure(api_key=GEMINI_KEY)
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    try:
+                        alt_model = genai.GenerativeModel(m.name, generation_config={"temperature": 0.85})
+                        res = alt_model.generate_content(prompt_text)
+                        if res and res.text:
+                            cached_model = alt_model
+                            return res.text.strip(), None
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None, str(err)
+        
+    return None, "AI bo'sh javob qaytardi."
 
 # Telegram bot sozlamasi
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or config.BOT_TOKEN
@@ -129,7 +181,7 @@ def get_bell_time(smena, slot_num):
     return ""
 
 def send_long_ai_message(chat_id, text, reply_to_id=None):
-    """Uzun AI matnlarini (4000 belgidan katta) xatosiz yetkazuvchi himoya"""
+    """Uzun AI matnlarini bo'lib, xatosiz yetkazadi"""
     chunks = []
     while len(text) > 3900:
         split_idx = text.rfind("\n", 0, 3900)
@@ -825,7 +877,7 @@ def handle_fam_back(call):
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# ==================== 🎮 ZUKKO O'YINLAR ====================
+# ==================== 🎮 ZUKKO O'YINLAR (22 DAQIQA VA RANGLI HUB) ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "🎮 Zukko O‘yinlar")
 def handle_games_entry(message):
@@ -1031,7 +1083,33 @@ def handle_math_answer(call):
     bot.edit_message_text(res_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# 2. AI Viktorina
+# 2. AI Viktorina (Rang-barang mavzular generatori)
+QUIZ_TOPICS = [
+    "Koinot, sayyoralar, yulduzlar va qora tuynuklar",
+    "G'aroyib hayvonot olami, yirtqichlar va qushlar",
+    "Dengizlar, okeanlar va suvosti maxluqlari",
+    "Buyuk ixtirolar, robotlar va texnologiyalar",
+    "O'zbekiston tabiati, tog'lari, daryolari va shaharlari",
+    "Inson tanasi, ko'zlar, yurak va salomatlik sirlari",
+    "O'simliklar, daraxtlar, gullar va o'rmonlar siri",
+    "Dunyo mo'jizalari, piramidalar va qadimiy afsonalar",
+    "Tabiat hodisalari: vulqonlar, chaqmoq, kamalak va qor",
+    "Ona tili, chiroyli so'zlar va topqirlik",
+    "Sport, olimpiada va sog'lom turmush tarzi",
+    "Qiziqarli mantiqiy savol va topqirlik"
+]
+
+FALLBACK_QUIZ = [
+    {"savol": "Dunyodagi eng katta quruqlik hayvoni qaysi?", "variantlar": ["Fil", "Karkidon", "Begemot", "Zirafa"], "togri_index": 0},
+    {"savol": "Quyosh sistemasidagi eng issiq sayyora qaysi?", "variantlar": ["Venera", "Merkuriy", "Mars", "Yupiter"], "togri_index": 0},
+    {"savol": "Inson tanasidagi eng katta a'zo qaysi?", "variantlar": ["Teri", "Jigar", "Yurak", "O'pka"], "togri_index": 0},
+    {"savol": "O'zbekistondagi eng baland tog' tizmasi qaysi?", "variantlar": ["Hisor tog'lari", "Chotqol tog'lari", "Nurota tog'lari", "Zarafshon tog'lari"], "togri_index": 0},
+    {"savol": "Eng tez yuguradigan yovvoyi hayvon qaysi?", "variantlar": ["Gepard", "Sher", "Bo'ri", "Kiyik"], "togri_index": 0},
+    {"savol": "O'simliklar quyosh nuridan foydalanib oziqlanish jarayoni nima deb ataladi?", "variantlar": ["Fotosintez", "Nafas olish", "Bug'lanish", "Eriydiganlik"], "togri_index": 0},
+    {"savol": "Dunyodagi eng katta okean qaysi?", "variantlar": ["Tinch okeani", "Atlantika okeani", "Hind okeani", "Shimoliy Muz okeani"], "togri_index": 0},
+    {"savol": "Qaysi qush orqaga qarab ucha oladi?", "variantlar": ["Kolibri", "Qaldirg'och", "Burgut", "Chumchuq"], "togri_index": 0}
+]
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("g_quiz_"))
 def handle_quiz_game(call):
     ch_idx = int(call.data.replace("g_quiz_", ""))
@@ -1042,23 +1120,30 @@ def handle_quiz_game(call):
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
         return
         
-    bot.edit_message_text("⏳ <i>Gemini AI siz uchun maxsus rangli savol tuzmoqda...</i>", call.message.chat.id, call.message.message_id)
+    bot.edit_message_text("⏳ <i>Gemini AI yangi, qiziqarli savol tayyorlamoqda...</i>", call.message.chat.id, call.message.message_id)
     
+    rnd_topic = random.choice(QUIZ_TOPICS)
+    rnd_num = random.randint(100, 999)
     prompt = (
-        f"O'quvchi {ch.get('class', '4')}-sinfda o'qiydi. Unga umumiy fanlardan 1 ta qiziqarli savol va 4 ta variant tuzib ber. "
+        f"Sen maktab o'quvchilari uchun ajoyib bilimdonlar viktorinasi muallifisan. "
+        f"O'quvchi {ch.get('class', '4')}-sinfda o'qiydi. "
+        f"Mavzu: '{rnd_topic}'. Tasodifiy ID: {rnd_num}. "
+        f"O'quvchini hayratda qoldiradigan, takrorlanmaydigan, qiziqarli 1 ta test savoli va 4 ta variant (biri to'g'ri) tuzib ber. "
+        f"Standart zerikarli savollardan qoch. "
         f"Javobni FAQAT quyidagi JSON formatida qaytar:\n"
         f'{{"savol": "Savol matni", "variantlar": ["A javob", "B javob", "C javob", "D javob"], "togri_index": 0}}'
     )
     ans_text, _ = generate_ai_response(prompt)
-    try:
-        clean_json = re.search(r'\{.*\}', ans_text, re.DOTALL).group(0)
-        q_data = json.loads(clean_json)
-    except Exception:
-        q_data = {
-            "savol": "Alisher Navoiy qaysi asrning buyuk shoiri hisoblanadi?",
-            "variantlar": ["XV asr", "XII asr", "XVIII asr", "XIX asr"],
-            "togri_index": 0
-        }
+    q_data = None
+    if ans_text:
+        try:
+            clean_json = re.search(r'\{.*\}', ans_text, re.DOTALL).group(0)
+            q_data = json.loads(clean_json)
+        except Exception:
+            q_data = None
+            
+    if not q_data or not isinstance(q_data.get("variantlar"), list) or len(q_data["variantlar"]) < 4:
+        q_data = random.choice(FALLBACK_QUIZ)
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     color_icons = ["🟣 A)", "🔵 B)", "🟡 C)", "🟢 D)"]
@@ -1104,12 +1189,22 @@ def handle_quiz_ans(call):
     bot.edit_message_text(res, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# 3. Mantiqiy Topishmoqlar
-RIDDLES = [
+# 3. Mantiqiy Topishmoqlar (Kengaytirilgan Zaxira va AI)
+LARGE_RIDDLES_BANK = [
     {"q": "Qo‘li yo‘q, oyog‘i yo‘q, derazaga naqsh chizar. Bu nima?", "opts": ["Ayoz / Qahraton", "Yomg‘ir", "Shamol", "Qor"], "c": 0},
     {"q": "O‘zi bitta, ko‘zi mingtadan ko‘p. Bu nima?", "opts": ["G‘alvir", "Ko‘zoynak", "Daftar", "Yulduz"], "c": 0},
     {"q": "Kunduzi uxlaydi, kechasi yonadi. Bu nima?", "opts": ["Oy va yulduzlar", "Quyosh", "Gugurt", "Sham"], "c": 0},
-    {"q": "Tilsiz, zabonsiz, kishiga aql o‘rgatar. Bu nima?", "opts": ["Kitob", "Radio", "Telefon", "Qalam"], "c": 0}
+    {"q": "Tilsiz, zabonsiz, kishiga aql o‘rgatar. Bu nima?", "opts": ["Kitob", "Radio", "Telefon", "Qalam"], "c": 0},
+    {"q": "Usti qalin tosh, ichida bor go‘sht. Bu nima?", "opts": ["Toshbaqa", "Yong‘oq", "Tuxum", "Qo‘ziqorin"], "c": 0},
+    {"q": "Qanoti bor uchmaydi, oyog‘i bor yurmaydi, suvsiz yashay olmaydi. Bu nima?", "opts": ["Baliq", "Baqа", "O‘rdak", "Qisqichbaqa"], "c": 0},
+    {"q": "Oyoqsiz yugurar, qanotsiz uchar, qo‘lsiz eshik qoqar. Bu nima?", "opts": ["Shamol", "Bulut", "Suv", "Yomg‘ir"], "c": 0},
+    {"q": "Bir idishda ikki xil sharbat, bir-biriga qo‘shilmaydi. Bu nima?", "opts": ["Tuxum", "Qovun", "Tarvuz", "Anor"], "c": 0},
+    {"q": "Og‘zi yo‘q, tili yo‘q, dunyo xabarini aytar. Bu nima?", "opts": ["Xat / Gazeta", "Daftar", "Soat", "Ko‘zgu"], "c": 0},
+    {"q": "Yurganda oyog‘i ostida oqar, qishda qotib muz bo‘lar. Bu nima?", "opts": ["Daryo", "Qor", "Shabnam", "Yomg‘ir"], "c": 0},
+    {"q": "O‘zi kichkina, yuki ulkan, mehnatkash bir jonivor. Bu nima?", "opts": ["Chumoli", "Asalarilar", "Qo‘ng‘iz", "Ninachi"], "c": 0},
+    {"q": "Kunduzi osmonda porlar, kechasi esa yo‘qolar. Bu nima?", "opts": ["Quyosh", "Oy", "Kometa", "Yulduz"], "c": 0},
+    {"q": "Oyog‘i bor, boshida shlyapasi bor, lekin odam emas. Bu nima?", "opts": ["Qo‘ziqorin", "Mix", "Soyabon", "Daraxt"], "c": 0},
+    {"q": "Borgan sari qisqarar, xat yozganda kirt-kirt qilar. Bu nima?", "opts": ["Qalam", "Bo‘r", "Ruchka", "Chizg‘ich"], "c": 0}
 ]
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("g_riddle_"))
@@ -1122,7 +1217,7 @@ def handle_riddle_game(call):
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
         return
         
-    r = random.choice(RIDDLES)
+    r = random.choice(LARGE_RIDDLES_BANK)
     markup = types.InlineKeyboardMarkup(row_width=1)
     icons = ["🟡", "🟠", "🟢", "🔵"]
     for i, opt in enumerate(r["opts"]):
@@ -1991,7 +2086,7 @@ def send_paced_reminders(is_morning=False):
         msg = f"🔔🔔🔔\n<b>80-Maktab dars jadvali eslatma</b>\n\nUstoz {u['full_name']}, {salom}!\nRejim: <b>{rejim}</b>\n\n"
         t = database.get_teacher_schedule(t_name)
         if t:
-            s_list = [f"• {p}-dars ({get_bell_time(1, p)}): {', '.join([x['class'] for x in t.get('schedule',{}).get(target_day,{}).get(str(p),[])])}" for p in range(1, 7) if t.get('schedule',{}).get(target_day,{}).get(str(p))]
+            s_list = [f"• {p}-dars ({get_bell_time(1, p)}): {', '.join([x['class'] for x in e])}" for p in range(1, 7) if t.get('schedule',{}).get(target_day,{}).get(str(p))]
             msg += "\n".join(s_list) if s_list else "Darslar yo‘q."
             
         if uid_str in f_data and f_data[uid_str].get("children"):
@@ -2075,5 +2170,5 @@ if __name__ == "__main__":
         pass
     Thread(target=run_web, daemon=True).start()
     Thread(target=reminder_scheduler, daemon=True).start()
-    print("80-maktab 'Ustoz AI' to'liq boshqaruv tizimi ishga tushdi...")
+    print("80-maktab 'Ustoz AI' to'liq boshqaruv markazi ishga tushdi...")
     bot.infinity_polling(skip_pending=True)
