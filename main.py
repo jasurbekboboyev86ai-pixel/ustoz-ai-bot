@@ -10,6 +10,7 @@ import time
 import re
 import json
 import random
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 from flask import Flask
@@ -137,11 +138,16 @@ USER_STATES = {}
 UZ_TZ = timezone(timedelta(hours=5))
 MAX_DAILY_GAME_SECONDS = 22 * 60  # Kuniga 22 daqiqa o'yin vaqti
 
+# 3D Animatsiya havolalari
+STAR_3D_GIF = "https://media.giphy.com/media/26FPJGjhefSJuaRhu/giphy.gif"
+DIAMOND_3D_GIF = "https://media.giphy.com/media/l41lFw057lAJQMwg0/giphy.gif"
+
 # ==================== JSON MA'LUMOT BAZALARI ====================
 ZVONOK_FILE = "zvonok_jadvali.json"
 TOGARAK_FILE = "togaraklar.json"
 LIBRARY_FILE = "library_books.json"
 FAMILY_FILE = "family_children.json"
+USER_ROLES_FILE = "user_roles.json"
 
 DEFAULT_BELL_SCHEDULE = {
     "rejim": "yozgi",
@@ -181,7 +187,6 @@ def get_bell_time(smena, slot_num):
     return ""
 
 def send_long_ai_message(chat_id, text, reply_to_id=None):
-    """Uzun AI matnlarini bo'lib, xatosiz yetkazadi"""
     chunks = []
     while len(text) > 3900:
         split_idx = text.rfind("\n", 0, 3900)
@@ -199,6 +204,64 @@ def send_long_ai_message(chat_id, text, reply_to_id=None):
         except Exception:
             clean = chunk.replace("*", "").replace("_", "").replace("`", "").replace("#", "")
             bot.send_message(chat_id, clean, parse_mode=None, reply_to_message_id=rep)
+
+# ==================== FOYDALANUVCHI ROLLARI VA QULFLASH ====================
+
+def save_user_role(uid, role, full_name=None, teacher_name=None):
+    roles = load_json_data(USER_ROLES_FILE, {})
+    roles[str(uid)] = {
+        "role": role,
+        "full_name": full_name or "",
+        "teacher_name": teacher_name or "",
+        "updated_at": datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_json_data(USER_ROLES_FILE, roles)
+
+def get_user_role_and_data(uid):
+    """Foydalanuvchi rolini hech qachon yo'qotmaydigan qat'iy tekshiruv"""
+    # 1. user_roles.json keshidan tekshirish
+    roles_cache = load_json_data(USER_ROLES_FILE, {})
+    u_cache = roles_cache.get(str(uid))
+
+    # 2. SQLite bazadan tekshirish
+    try:
+        db_user = database.get_user(uid)
+        if db_user and db_user.get("role"):
+            role = db_user["role"]
+            save_user_role(uid, role, db_user.get("full_name"), db_user.get("teacher_name"))
+            return role, db_user
+    except Exception:
+        pass
+
+    # 3. Adminlar ro'yxatidan tekshirish
+    try:
+        admins = database.get_all_admins()
+        if uid in admins:
+            save_user_role(uid, "admin", "Bosh Admin", "Boboev J")
+            return "admin", {"role": "admin", "full_name": "Bosh Admin", "teacher_name": "Boboev J"}
+    except Exception:
+        pass
+
+    # 4. Agar keshda bo'lsa
+    if u_cache and u_cache.get("role"):
+        return u_cache["role"], u_cache
+
+    # 5. Farzandlar bazasidan tekshirish
+    f_data = load_json_data(FAMILY_FILE, {})
+    if str(uid) in f_data and len(f_data[str(uid)].get("children", [])) > 0:
+        save_user_role(uid, "student_parent")
+        return "student_parent", {"role": "student_parent"}
+
+    # 6. Sinf obunalaridan tekshirish
+    try:
+        subs = database.get_user_subscriptions(uid)
+        if subs:
+            save_user_role(uid, "student_parent")
+            return "student_parent", {"role": "student_parent"}
+    except Exception:
+        pass
+
+    return None, None
 
 # ==================== O'QITUVCHILAR RO'YXATI SAHIFALARI ====================
 
@@ -311,10 +374,7 @@ def get_class_day_schedule(class_name, day):
                     subj = e.get("subject") or (t["subjects"][0] if t["subjects"] else "Dars")
                     if slot_num not in slots_data:
                         slots_data[slot_num] = []
-                    slots_data[slot_num].append({
-                        "teacher": t["name"],
-                        "subject": subj
-                    })
+                    slots_data[slot_num].append({"teacher": t["name"], "subject": subj})
     return slots_data
 
 def format_class_day_schedule(class_name, day):
@@ -324,8 +384,7 @@ def format_class_day_schedule(class_name, day):
     rejim_nomi = "☀️ Yozgi rejim" if rejim == "yozgi" else "❄️ Qishki rejim"
 
     text = f"🎒 <b>{class_name.upper()} SINF — {day.upper()} KUNI:</b>\n"
-    text += f"📌 <i>Dars vaqtlari: {rejim_nomi}</i>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"📌 <i>Dars vaqtlari: {rejim_nomi}</i>\n━━━━━━━━━━━━━━━━━━━━\n"
     
     s1_lines = []
     for p in range(1, 7):
@@ -352,8 +411,7 @@ def format_class_day_schedule(class_name, day):
     return text
 
 def format_class_week_schedule(class_name):
-    text = f"🗓️ <b>{class_name.upper()} SINF — TO'LIQ HAFTALIK JADVAL</b>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    text = f"🗓️ <b>{class_name.upper()} SINF — TO'LIQ HAFTALIK JADVAL</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
     for d in config.DAYS:
         slots_data = get_class_day_schedule(class_name, d)
         day_lines = []
@@ -376,7 +434,7 @@ def format_class_week_schedule(class_name):
     text += "━━━━━━━━━━━━━━━━━━━━"
     return text
 
-# ==================== O'YIN TAYMERI VA VALYUTA ====================
+# ==================== O'YIN TAYMERI, VIZUAL JAVON VA VALYUTA ====================
 
 def get_child_timer_status(uid_str, child_idx, register_activity=False):
     f_data = load_json_data(FAMILY_FILE, {})
@@ -406,6 +464,12 @@ def get_child_timer_status(uid_str, child_idx, register_activity=False):
     rem_sec = max(0, MAX_DAILY_GAME_SECONDS - played)
     is_exhausted = (rem_sec <= 0)
     return rem_sec, is_exhausted, ch
+
+def render_star_shelf(yulduz):
+    """Oltin Yulduzlar Javoni (Vizual shkala: har 10 ta yulduzda to'ladi)"""
+    level_stars = yulduz % 10
+    shelf = " ".join(["⭐"] * level_stars + ["⚪"] * (10 - level_stars))
+    return f"[ {shelf} ] ({level_stars}/10 ta ⭐)"
 
 def get_child_theme_and_rank(brilliant, yulduz, tanga):
     if brilliant >= 100:
@@ -459,7 +523,7 @@ def get_peer_rank(target_class, target_name, target_uid):
             
     return my_rank, len(peers), gr_num
 
-def update_child_wallet(uid_str, child_idx, add_tanga=0, add_yulduz=0, add_brilliant=0):
+def update_child_wallet(chat_id, uid_str, child_idx, add_tanga=0, add_yulduz=0, add_brilliant=0):
     f_data = load_json_data(FAMILY_FILE, {})
     ch = f_data[uid_str]["children"][child_idx]
     
@@ -468,17 +532,40 @@ def update_child_wallet(uid_str, child_idx, add_tanga=0, add_yulduz=0, add_brill
     brilliant = ch.get("brilliant", 0) + add_brilliant
     notice = ""
 
+    # 10 ta Tanga = 1 ta Yulduzcha
     if tanga >= 10:
         new_stars = tanga // 10
         yulduz += new_stars
         tanga = tanga % 10
-        notice += f"\n🌟 <b>Qoyilmaqom!</b> 10 ta tangangiz <b>+{new_stars} ta ⭐ Oltin Yulduzcha</b>ga aylandi!"
+        notice += f"\n\n🌟 <b>BUYUK YUTUQ!</b> 10 ta tangangiz <b>+{new_stars} ta ⭐ OLTIN YULDUZCHA</b>ga aylandi!"
+        if chat_id:
+            try:
+                bot.send_animation(
+                    chat_id, 
+                    STAR_3D_GIF, 
+                    caption=f"✨✨✨ <b>BARAKALLA, {ch['name'].upper()}!</b> ✨✨✨\n"
+                            f"Siz 10 ta tangani birlashtirib, <b>⭐ Oltin Yulduz</b> qo‘lga kiritdingiz! 🚀\n\n"
+                            f"🏆 <b>Yulduzlar javoni:</b>\n{render_star_shelf(yulduz)}"
+                )
+            except Exception:
+                pass
 
+    # 100 ta Yulduzcha = 1 ta Brilliant
     if yulduz >= 100:
         new_brill = yulduz // 100
         brilliant += new_brill
         yulduz = yulduz % 100
-        notice += f"\n💎💎💎 <b>BUYUK ZAFAR!</b> 100 ta yulduzchangiz <b>+{new_brill} ta 💎 BRILLIANT</b>ga aylandi!"
+        notice += f"\n\n💎💎💎 <b>SHON-SHARAF!</b> 100 ta yulduzchangiz <b>+{new_brill} ta 💎 BRILLIANT</b>ga aylandi!"
+        if chat_id:
+            try:
+                bot.send_animation(
+                    chat_id, 
+                    DIAMOND_3D_GIF, 
+                    caption=f"🌌 <b>HAQIQIY MO‘JIZA!</b> 🌌\n"
+                            f"<b>{ch['name'].upper()}</b> maktab shohsupasiga ko‘tarildi: <b>+1 💎 BRILLIANT!</b>"
+                )
+            except Exception:
+                pass
 
     ch["tanga"] = tanga
     ch["yulduz"] = yulduz
@@ -654,7 +741,7 @@ def get_days_inline_keyboard(prefix="day_view"):
     markup.add(types.InlineKeyboardButton("🏠 Bosh sahifaga qaytish", callback_data="go_home_inline"))
     return markup
 
-# ==================== START VA BOSH SAHIFA ====================
+# ==================== START VA BOSH SAHIFA (QAT'IY QULFLANGAN) ====================
 
 @bot.message_handler(commands=['start'])
 @bot.message_handler(func=lambda msg: msg.text in ["🏠 Bosh sahifa", "🏠 Bosh sahifaga qaytish"])
@@ -664,28 +751,31 @@ def handle_start(message):
         del USER_STATES[uid]
     
     database.update_activity(uid, message.from_user.first_name)
-    user = database.get_user(uid)
     
-    if user and user.get("role") == "admin":
+    # Qat'iy qulf: foydalanuvchi kimligini bazadan va keshdan tekshirish
+    role, u_data = get_user_role_and_data(uid)
+    
+    if role == "admin":
+        admin_name = u_data.get("full_name") or message.from_user.first_name or "Jasurbek aka"
         bot.send_message(
             message.chat.id,
-            f"👑 <b>Assalomu alaykum, Bosh Admin {user['full_name']}!</b>\n"
+            f"👑 <b>Assalomu alaykum, Bosh Admin {admin_name}!</b>\n"
             f"80-Maktab boshqaruv markazidasiz. Barcha tizimlar to‘liq nazoratingizda.",
             reply_markup=get_admin_keyboard()
         )
         return
         
-    if user and user.get("role") == "teacher":
+    if role == "teacher":
+        t_name = u_data.get("teacher_name") or u_data.get("full_name") or "Ustoz"
         bot.send_message(
             message.chat.id,
-            f"👨‍🏫 <b>Assalomu alaykum, {user['teacher_name']}!</b>\n"
+            f"👨‍🏫 <b>Assalomu alaykum, {t_name}!</b>\n"
             f"80-maktab 'Ustoz AI' shaxsiy kabinetingizdasiz.",
             reply_markup=get_teacher_keyboard()
         )
         return
 
-    f_data = load_json_data(FAMILY_FILE, {})
-    if str(uid) in f_data and f_data[str(uid)].get("confirmed"):
+    if role in ["student", "student_parent"]:
         bot.send_message(
             message.chat.id,
             f"🎒 <b>Assalomu alaykum!</b>\n80-Maktab ta’lim va Zukko O‘yinlar portaliga xush kelibsiz.",
@@ -693,6 +783,7 @@ def handle_start(message):
         )
         return
 
+    # Faqat birorta ham roli bo'lmagan yangi mehmon uchun chiqadi
     bot.send_message(
         message.chat.id,
         "🏫 <b>80-umumiy o‘rta ta’lim maktabi «Ustoz AI» tizimiga xush kelibsiz!</b>\n\n"
@@ -731,6 +822,7 @@ def handle_contact_submission(message):
     
     if database.is_phone_admin(phone, config.ADMIN_PHONES):
         database.register_user(uid, phone, full_name, "Boboev J", "admin")
+        save_user_role(uid, "admin", full_name, "Boboev J")
         bot.send_message(message.chat.id, "🎉 <b>Bosh Admin kabinetingiz ochildi.</b>", reply_markup=get_admin_keyboard())
         return
 
@@ -765,9 +857,11 @@ def handle_admin_app(call):
     req_id = int(call.data.split("_")[1])
     req = database.approve_request(req_id)
     if req:
+        t_uid = req["telegram_id"]
+        save_user_role(t_uid, "teacher", req.get("full_name"), req.get("teacher_name"))
         bot.edit_message_text(f"✅ Tasdiqlandi: <b>{req['teacher_name']}</b>", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(req["telegram_id"], "🎉 <b>Arizangiz tasdiqlandi! Siz faolsiz.</b>", reply_markup=get_teacher_keyboard())
+            bot.send_message(t_uid, "🎉 <b>Arizangiz tasdiqlandi! Shaxsiy kabinetingiz ochildi.</b>", reply_markup=get_teacher_keyboard())
         except Exception:
             pass
 
@@ -840,7 +934,9 @@ def handle_fam_confirm(call):
     if uid in f_data and f_data[uid].get("children"):
         f_data[uid]["confirmed"] = True
         save_json_data(FAMILY_FILE, f_data)
+        save_user_role(call.from_user.id, "student_parent")
         bot.answer_callback_query(call.id, "Tasdiqlandi! ✅")
+        
         user = database.get_user(call.from_user.id)
         if user and user.get("role") == "teacher":
             bot.send_message(call.message.chat.id, "✅ Farzandlaringiz tasdiqlandi!", reply_markup=get_teacher_keyboard())
@@ -925,6 +1021,7 @@ def render_child_game_hub(uid_str, ch_idx):
     played_sec = MAX_DAILY_GAME_SECONDS - rem_sec
     time_pct = min(10, int((played_sec / MAX_DAILY_GAME_SECONDS) * 10))
     time_bar = "🟥" * time_pct + "🟩" * (10 - time_pct)
+    star_shelf = render_star_shelf(y)
 
     if is_exhausted:
         stop_text = (
@@ -955,6 +1052,9 @@ def render_child_game_hub(uid_str, ch_idx):
         f"💎 <b>Brilliant:</b> <code>{b} ta</code>\n"
         f"⭐ <b>Oltin Yulduz:</b> <code>{y} ta</code>\n"
         f"🪙 <b>Zukko Tanga:</b> <code>{t} / 10 ta</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏆 <b>Oltin Yulduzlar Javoni:</b>\n"
+        f"{star_shelf}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"⏳ <b>Bugungi qolgan vaqtingiz:</b> <b>{rem_min} daqiqa {rem_s} soniya</b>\n"
         f"   <code>[{time_bar}]</code> (Maks: 22 daq)\n"
@@ -1072,8 +1172,13 @@ def handle_math_answer(call):
         return
         
     if is_correct:
-        ch, note = update_child_wallet(uid_str, ch_idx, add_tanga=1)
-        res_text = f"🎉 <b>BARAKALLA, TO‘G‘RI!</b>\n\n🪙 Sizga <b>+1 Zukko Tanga</b> berildi!{note}\n\nHisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}"
+        ch, note = update_child_wallet(call.message.chat.id, uid_str, ch_idx, add_tanga=1)
+        res_text = (
+            f"🎉 <b>BARAKALLA, TO‘G‘RI!</b>\n\n"
+            f"🪙 Sizga <b>+1 Zukko Tanga</b> berildi!{note}\n\n"
+            f"🏆 <b>Yulduzlar javoni:</b>\n{render_star_shelf(ch['yulduz'])}\n"
+            f"Hisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}/10"
+        )
     else:
         res_text = f"❌ <b>Afsus, noto‘g‘ri!</b>\nTo‘g‘ri javob: <b>{correct_ans}</b> edi."
         
@@ -1083,7 +1188,7 @@ def handle_math_answer(call):
     bot.edit_message_text(res_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# 2. AI Viktorina (Rang-barang mavzular generatori)
+# 2. AI Viktorina
 QUIZ_TOPICS = [
     "Koinot, sayyoralar, yulduzlar va qora tuynuklar",
     "G'aroyib hayvonot olami, yirtqichlar va qushlar",
@@ -1104,10 +1209,7 @@ FALLBACK_QUIZ = [
     {"savol": "Quyosh sistemasidagi eng issiq sayyora qaysi?", "variantlar": ["Venera", "Merkuriy", "Mars", "Yupiter"], "togri_index": 0},
     {"savol": "Inson tanasidagi eng katta a'zo qaysi?", "variantlar": ["Teri", "Jigar", "Yurak", "O'pka"], "togri_index": 0},
     {"savol": "O'zbekistondagi eng baland tog' tizmasi qaysi?", "variantlar": ["Hisor tog'lari", "Chotqol tog'lari", "Nurota tog'lari", "Zarafshon tog'lari"], "togri_index": 0},
-    {"savol": "Eng tez yuguradigan yovvoyi hayvon qaysi?", "variantlar": ["Gepard", "Sher", "Bo'ri", "Kiyik"], "togri_index": 0},
-    {"savol": "O'simliklar quyosh nuridan foydalanib oziqlanish jarayoni nima deb ataladi?", "variantlar": ["Fotosintez", "Nafas olish", "Bug'lanish", "Eriydiganlik"], "togri_index": 0},
-    {"savol": "Dunyodagi eng katta okean qaysi?", "variantlar": ["Tinch okeani", "Atlantika okeani", "Hind okeani", "Shimoliy Muz okeani"], "togri_index": 0},
-    {"savol": "Qaysi qush orqaga qarab ucha oladi?", "variantlar": ["Kolibri", "Qaldirg'och", "Burgut", "Chumchuq"], "togri_index": 0}
+    {"savol": "Eng tez yuguradigan yovvoyi hayvon qaysi?", "variantlar": ["Gepard", "Sher", "Bo'ri", "Kiyik"], "togri_index": 0}
 ]
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("g_quiz_"))
@@ -1125,12 +1227,11 @@ def handle_quiz_game(call):
     rnd_topic = random.choice(QUIZ_TOPICS)
     rnd_num = random.randint(100, 999)
     prompt = (
-        f"Sen maktab o'quvchilari uchun ajoyib bilimdonlar viktorinasi muallifisan. "
+        f"Sen maktab o'quvchilari uchun qiziqarli bilimdonlar viktorinasi tuzuvchisisan. "
         f"O'quvchi {ch.get('class', '4')}-sinfda o'qiydi. "
         f"Mavzu: '{rnd_topic}'. Tasodifiy ID: {rnd_num}. "
-        f"O'quvchini hayratda qoldiradigan, takrorlanmaydigan, qiziqarli 1 ta test savoli va 4 ta variant (biri to'g'ri) tuzib ber. "
-        f"Standart zerikarli savollardan qoch. "
-        f"Javobni FAQAT quyidagi JSON formatida qaytar:\n"
+        f"Faqat o'zbek tilida, bolaning yoshiga mos 1 ta ajoyib savol va 4 ta variant (biri to'g'ri) tuz. "
+        f"Javobni FAQAT JSON formatida ber:\n"
         f'{{"savol": "Savol matni", "variantlar": ["A javob", "B javob", "C javob", "D javob"], "togri_index": 0}}'
     )
     ans_text, _ = generate_ai_response(prompt)
@@ -1178,8 +1279,13 @@ def handle_quiz_ans(call):
         return
         
     if is_correct:
-        ch, note = update_child_wallet(uid_str, ch_idx, add_tanga=2)
-        res = f"🎉 <b>A’LO! TO‘G‘RI JAVOB!</b>\n\n🪙 <b>+2 Zukko Tanga</b> qo‘shildi!{note}\n\nHisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}"
+        ch, note = update_child_wallet(call.message.chat.id, uid_str, ch_idx, add_tanga=2)
+        res = (
+            f"🎉 <b>A’LO! TO‘G‘RI JAVOB!</b>\n\n"
+            f"🪙 <b>+2 Zukko Tanga</b> qo‘shildi!{note}\n\n"
+            f"🏆 <b>Yulduzlar javoni:</b>\n{render_star_shelf(ch['yulduz'])}\n"
+            f"Hisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}/10"
+        )
     else:
         res = "❌ <b>Afsus, noto‘g‘ri javob!</b> Keyingi savolda omad tilaymiz! 🌟"
         
@@ -1189,7 +1295,7 @@ def handle_quiz_ans(call):
     bot.edit_message_text(res, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# 3. Mantiqiy Topishmoqlar (Kengaytirilgan Zaxira va AI)
+# 3. Mantiqiy Topishmoqlar
 LARGE_RIDDLES_BANK = [
     {"q": "Qo‘li yo‘q, oyog‘i yo‘q, derazaga naqsh chizar. Bu nima?", "opts": ["Ayoz / Qahraton", "Yomg‘ir", "Shamol", "Qor"], "c": 0},
     {"q": "O‘zi bitta, ko‘zi mingtadan ko‘p. Bu nima?", "opts": ["G‘alvir", "Ko‘zoynak", "Daftar", "Yulduz"], "c": 0},
@@ -1198,13 +1304,7 @@ LARGE_RIDDLES_BANK = [
     {"q": "Usti qalin tosh, ichida bor go‘sht. Bu nima?", "opts": ["Toshbaqa", "Yong‘oq", "Tuxum", "Qo‘ziqorin"], "c": 0},
     {"q": "Qanoti bor uchmaydi, oyog‘i bor yurmaydi, suvsiz yashay olmaydi. Bu nima?", "opts": ["Baliq", "Baqа", "O‘rdak", "Qisqichbaqa"], "c": 0},
     {"q": "Oyoqsiz yugurar, qanotsiz uchar, qo‘lsiz eshik qoqar. Bu nima?", "opts": ["Shamol", "Bulut", "Suv", "Yomg‘ir"], "c": 0},
-    {"q": "Bir idishda ikki xil sharbat, bir-biriga qo‘shilmaydi. Bu nima?", "opts": ["Tuxum", "Qovun", "Tarvuz", "Anor"], "c": 0},
-    {"q": "Og‘zi yo‘q, tili yo‘q, dunyo xabarini aytar. Bu nima?", "opts": ["Xat / Gazeta", "Daftar", "Soat", "Ko‘zgu"], "c": 0},
-    {"q": "Yurganda oyog‘i ostida oqar, qishda qotib muz bo‘lar. Bu nima?", "opts": ["Daryo", "Qor", "Shabnam", "Yomg‘ir"], "c": 0},
-    {"q": "O‘zi kichkina, yuki ulkan, mehnatkash bir jonivor. Bu nima?", "opts": ["Chumoli", "Asalarilar", "Qo‘ng‘iz", "Ninachi"], "c": 0},
-    {"q": "Kunduzi osmonda porlar, kechasi esa yo‘qolar. Bu nima?", "opts": ["Quyosh", "Oy", "Kometa", "Yulduz"], "c": 0},
-    {"q": "Oyog‘i bor, boshida shlyapasi bor, lekin odam emas. Bu nima?", "opts": ["Qo‘ziqorin", "Mix", "Soyabon", "Daraxt"], "c": 0},
-    {"q": "Borgan sari qisqarar, xat yozganda kirt-kirt qilar. Bu nima?", "opts": ["Qalam", "Bo‘r", "Ruchka", "Chizg‘ich"], "c": 0}
+    {"q": "Bir idishda ikki xil sharbat, bir-biriga qo‘shilmaydi. Bu nima?", "opts": ["Tuxum", "Qovun", "Tarvuz", "Anor"], "c": 0}
 ]
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("g_riddle_"))
@@ -1250,8 +1350,13 @@ def handle_riddle_ans(call):
         return
         
     if is_correct:
-        ch, note = update_child_wallet(uid_str, ch_idx, add_tanga=2)
-        res = f"🎉 <b>TOPQIRSIZ! TO‘G‘RI TOPDINGIZ!</b>\n\n🪙 <b>+2 Zukko Tanga</b> hisobingizga tushdi!{note}\n\nHisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}"
+        ch, note = update_child_wallet(call.message.chat.id, uid_str, ch_idx, add_tanga=2)
+        res = (
+            f"🎉 <b>TOPQIRSIZ! TO‘G‘RI TOPDINGIZ!</b>\n\n"
+            f"🪙 <b>+2 Zukko Tanga</b> hisobingizga tushdi!{note}\n\n"
+            f"🏆 <b>Yulduzlar javoni:</b>\n{render_star_shelf(ch['yulduz'])}\n"
+            f"Hisob: 💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}/10"
+        )
     else:
         res = "❌ <b>Topa olmadingiz!</b> Boshqa topishmoqni sinab ko‘ring! 💡"
         
@@ -1632,8 +1737,7 @@ def handle_broadcast_menu(message):
         types.InlineKeyboardButton("👨‍🏫 Faqat o'qituvchilarga", callback_data="bcfilter_teachers"),
         types.InlineKeyboardButton("🎒 Faqat o'quvchi va ota-onalarga", callback_data="bcfilter_students"),
         types.InlineKeyboardButton("📢 Butun maktabga (Barchaga)", callback_data="bcfilter_all"),
-        types.InlineKeyboardButton("❌ Bekor qilish", callback_data="go_home_inline")
-    )
+        types.InlineKeyboardButton("❌ Bekor qilish", callback_data="go_home_inline"))
     bot.send_message(message.chat.id, "📢 <b>E'lon yuborish bo'limi:</b>\n\nXabarni kimlarga yubormoqchisiz?", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bcfilter_"))
@@ -1767,7 +1871,7 @@ def handle_grant_execute(call):
     dy = val if typ == "yulduz" else 0
     db = val if typ == "brill" else 0
     
-    ch, note = update_child_wallet(uid_str, ch_idx, add_tanga=dt, add_yulduz=dy, add_brilliant=db)
+    ch, note = update_child_wallet(call.message.chat.id, uid_str, ch_idx, add_tanga=dt, add_yulduz=dy, add_brilliant=db)
     bot.edit_message_text(f"✅ Mukofot topshirildi!\n\n{ch['name']} hisobi:\n💎 {ch['brilliant']} | ⭐ {ch['yulduz']} | 🪙 {ch['tanga']}", call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id, "Yuborildi!")
     
@@ -1874,7 +1978,7 @@ def handle_readlesson_call(call):
     bot.send_message(call.message.chat.id, f"📖 <b>{p[1]}-sinf {p[2]}</b>: qaysi dars kerak? Masalan: <code>7-dars</code> deb yozing:")
     bot.answer_callback_query(call.id)
 
-# ==================== METODIK AI YORDAMCHI ====================
+# ==================== METODIK AI YORDAMCHI (SOF O'ZBEKCHA + RASM) ====================
 
 @bot.message_handler(func=lambda msg: msg.text in ["💡 Metodik AI yordamchi", "💡 Savol-javob (AI)"])
 def handle_ai_prompt(message):
@@ -1980,6 +2084,7 @@ def handle_all_states(message):
             "played_seconds": 0, "last_played_date": ""
         })
         save_json_data(FAMILY_FILE, f_data)
+        save_user_role(uid, "student_parent")
         text, markup = render_family_card(uid)
         bot.send_message(message.chat.id, f"✅ <b>{c_name} ({c_cls})</b> qo‘shildi!\n\n" + text, reply_markup=markup, parse_mode="HTML")
         return
@@ -1996,7 +2101,10 @@ def handle_all_states(message):
         q = message.text.strip()
         del USER_STATES[uid]
         bot.send_chat_action(message.chat.id, 'typing')
-        prompt = f"Sen {gr}-sinf {subj} fani darslik muallifisan. '{q}' mavzusi bo'yicha maktab darsligi formatida o'quvchi uchun juda aniq, tushunarli qoidalar, dars matni va uyga vazifa tuzib ber."
+        prompt = (
+            f"Sen {gr}-sinf {subj} fani darslik muallifisan. '{q}' mavzusi bo'yicha maktab darsligi formatida o'quvchi uchun "
+            f"FAQAT sof o'zbek adabiy tilida, bitta ham inglizcha so'z ishlatmasdan juda aniq, tushunarli qoidalar, dars matni va uyga vazifa tuzib ber."
+        )
         ans, err = generate_ai_response(prompt)
         header = f"━━━━━━━━━━━━━━━━━━━━\n📖 *{gr.upper()}-SINF | {subj.upper()} DARSLIGI*\n━━━━━━━━━━━━━━━━━━━━\n\n"
         if ans:
@@ -2005,16 +2113,51 @@ def handle_all_states(message):
             bot.reply_to(message, f"⚠️ Xatolik: {err}")
         return
 
+    # METODIK AI: MAVZUGA MOS RASM + SOF O'ZBEKCHA DARSLIK
     if act == "ai_query":
         del USER_STATES[uid]
+        user_query = message.text.strip()
+        
+        # 1. Mavzuga mos illyustratsiya rasm yuborish
+        bot.send_chat_action(message.chat.id, 'upload_photo')
+        clean_q = re.sub(r'[^\w\s]', '', user_query)
+        img_prompt = urllib.parse.quote(f"high quality realistic educational illustration of {clean_q}, classroom, science, vibrant colors, 4k resolution, textbook style")
+        img_url = f"https://image.pollinations.ai/prompt/{img_prompt}?width=800&height=450&nologo=true"
+        
+        try:
+            bot.send_photo(message.chat.id, img_url, caption=f"🎨 <b>Mavzu illyustratsiyasi:</b> <i>{user_query[:100]}</i>")
+        except Exception:
+            pass
+
+        # 2. Sof o'zbekcha dars ishlanmasi / pedagogik javob
         bot.send_chat_action(message.chat.id, 'typing')
         prompt = (
-            "Sen O'zbekistondagi 80-umumiy o'rta ta'lim maktabining aqlli pedagogik AI yordamchisisan. "
-            "O'qituvchilar, o'quvchilar va ota-onalarning savollariga o'zbek tilida, muloyim, aniq va professional pedagogik darajada javob ber.\n\n"
-            f"Savol/Mavzu: {message.text}"
+            "Sen O'zbekistondagi 80-umumiy o'rta ta'lim maktabining oliy toifali pedagogik AI maslahatchisisan.\n\n"
+            "QAT'IY PEDAGOGIK QOIDALAR:\n"
+            "1. BARCHA javoblaringni FAQAT sof, go'zal va tushunarli o'zbek adabiy tilida yoz.\n"
+            "2. BIRORTA HAM inglizcha yoki chet tili so'zlarini ISHLATMA (masalan: Warm-up, Topic, Ice-breaker, Feedback, Assessment, Step, Overview, Skill, Game, Test kabilar QAT'IYAN TAQIQLANADI!).\n"
+            "3. Agar dars ishlanmasi (konspekt) so'ralgan bo'lsa, dars bosqichlarini quyidagi sof o'zbekcha tartibda tuz:\n"
+            "   • Darsning maqsadi va jihozlari\n"
+            "   • Tashkiliy qism va darsga kirish (qiziqarli savol)\n"
+            "   • Yangi mavzu bayoni va asosiy qoidalar\n"
+            "   • Mustahkamlovchi amaliy mashg‘ulot va savol-javoblar\n"
+            "   • Rag‘batlantirish va baholash mezonlari\n"
+            "   • Uyga vazifa\n"
+            "4. Agar savol berilgan bo'lsa, unga to'liq, ilmiy va pedagogik jihatdan aniq, muloyim javob ber.\n\n"
+            f"Murojaat matni: {user_query}"
         )
         answer, err = generate_ai_response(prompt)
         if answer:
+            # Inglizcha so'zlar qolib ketmasligi uchun tozalash
+            replacements = {
+                "Warm-up": "Darsga kirish", "warm-up": "darsga kirish",
+                "Ice-breaker": "Qiziqarli savol", "Icebreaker": "Qiziqarli savol",
+                "Topic": "Mavzu", "Feedback": "Qayta aloqa",
+                "Assessment": "Baholash", "Step 1": "1-bosqich",
+                "Step 2": "2-bosqich", "Step 3": "3-bosqich"
+            }
+            for eng, uz in replacements.items():
+                answer = answer.replace(eng, uz)
             send_long_ai_message(message.chat.id, answer, message.message_id)
         else:
             bot.reply_to(message, f"⚠️ AI javob berishda xatolik yuz berdi: {err}\n\nIltimos, qaytadan urinib ko'ring.")
@@ -2151,8 +2294,8 @@ def reminder_scheduler():
 def handle_general_ai(message):
     bot.send_chat_action(message.chat.id, 'typing')
     prompt = (
-        "Sen 80-maktab 'Ustoz AI' aqlli yordamchisisan. "
-        "Muloyim, aniq va samimiy javob ber:\n\n"
+        "Sen 80-maktab 'Ustoz AI' aqlli pedagogik yordamchisisan. "
+        "Faqat o'zbek tilida, muloyim, aniq va samimiy javob ber:\n\n"
         f"Savol: {message.text}"
     )
     ans, err = generate_ai_response(prompt)
@@ -2170,5 +2313,5 @@ if __name__ == "__main__":
         pass
     Thread(target=run_web, daemon=True).start()
     Thread(target=reminder_scheduler, daemon=True).start()
-    print("80-maktab 'Ustoz AI' to'liq boshqaruv markazi ishga tushdi...")
+    print("80-maktab 'Ustoz AI' to'liq boshqaruv tizimi ishga tushdi...")
     bot.infinity_polling(skip_pending=True)
