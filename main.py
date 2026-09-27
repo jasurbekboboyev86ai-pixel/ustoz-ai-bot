@@ -20,7 +20,7 @@ import telebot
 from telebot import types
 import google.generativeai as genai
 
-# Word (.docx) yaratish kutubxonasi
+# Word (.docx) kutubxonasi
 try:
     import docx
     from docx.shared import Inches, Pt, RGBColor
@@ -146,7 +146,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 USER_STATES = {}
 UZ_TZ = timezone(timedelta(hours=5))
 MAX_DAILY_GAME_SECONDS = 22 * 60  # Kuniga 22 daqiqa o'yin vaqti
-AI_LESSON_PLANS = {}  # Word fayl generatsiyasi uchun kesh
+AI_LESSON_PLANS = {}  # Word fayl kesh tizimi
 
 # 3D Animatsiya havolalari
 STAR_3D_GIF = "https://media.giphy.com/media/26FPJGjhefSJuaRhu/giphy.gif"
@@ -576,7 +576,7 @@ def update_child_wallet(chat_id, uid_str, child_idx, add_tanga=0, add_yulduz=0, 
     save_json_data(FAMILY_FILE, f_data)
     return ch, notice
 
-# ==================== INTERAKTIV TO'GARAK TIZIMI ====================
+# ==================== TO'GARAK SOZLAMALARI ====================
 
 def render_togarak_card(teacher_key):
     data = load_json_data(TOGARAK_FILE, {})
@@ -2425,4 +2425,56 @@ def send_paced_reminders(is_morning=False):
             lines = []
             for p in range(1, 7):
                 for tc in teachers:
-                    for e in tc.get("schedule", {}).get(target_day, {}).get(str(p), []
+                    for e in tc.get("schedule", {}).get(target_day, {}).get(str(p), []):
+                        if e.get("class", "").strip().upper() == ch['class'].strip().upper():
+                            lines.append(f"  • {p}-dars ({get_bell_time(1, p)}): {e.get('subject', 'Dars')} ({tc['name']})")
+                            break
+            msg += ("\n".join(lines) if lines else "  <i>Dars yo‘q.</i>") + "\n\n"
+        try:
+            bot.send_message(int(uid_str), msg)
+        except Exception:
+            pass
+        time.sleep(0.08)
+
+def reminder_scheduler():
+    s_m, s_e = "", ""
+    while True:
+        try:
+            now = datetime.now(UZ_TZ)
+            t_str = now.strftime("%Y-%m-%d")
+            if now.hour == 7 and 0 <= now.minute < 5 and s_m != t_str:
+                send_paced_reminders(is_morning=True)
+                s_m = t_str
+            if now.hour == 19 and 30 <= now.minute < 35 and s_e != t_str:
+                send_paced_reminders(is_morning=False)
+                s_e = t_str
+        except Exception:
+            pass
+        time.sleep(30)
+
+# --- UMUMIY ERKIN MATNLARGA AI JAVOBI ---
+@bot.message_handler(func=lambda msg: True)
+def handle_general_ai(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    prompt = (
+        "Sen 80-maktab 'Ustoz AI' aqlli pedagogik yordamchisisan. "
+        "Faqat o'zbek tilida, muloyim, aniq va samimiy javob ber:\n\n"
+        f"Savol: {message.text}"
+    )
+    ans, err = generate_ai_response(prompt)
+    if ans:
+        send_long_ai_message(message.chat.id, ans, message.message_id)
+    else:
+        bot.reply_to(message, f"⚠️ Xatolik: {err}\nMenyudan foydalanishingiz mumkin.")
+
+# ==================== ISHGA TUSHIRISH ====================
+
+if __name__ == "__main__":
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+    Thread(target=run_web, daemon=True).start()
+    Thread(target=reminder_scheduler, daemon=True).start()
+    print("80-maktab 'Ustoz AI' to'liq boshqaruv tizimi ishga tushdi...")
+    bot.infinity_polling(skip_pending=True)
