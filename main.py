@@ -267,7 +267,7 @@ def get_user_role_and_data(uid):
 
     return None, None
 
-# ==================== O'QITUVCHILAR RO'YXATI SAHIFALARI ====================
+# ==================== O'QITUVCHILAR RO'YXATI ====================
 
 def get_teachers_page_inline(page=0, per_page=8):
     teachers = database.get_teachers_list()
@@ -607,7 +607,7 @@ def render_togarak_card(teacher_key):
 
 @bot.message_handler(func=lambda msg: msg.text in ["🎨 To'garaklarim", "🎪 To‘garak", "🎪 Maktab to‘garaklari"])
 def handle_teacher_clubs_interactive(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     user = database.get_user(uid)
     teacher_key = user["teacher_name"] if (user and user.get("teacher_name")) else str(uid)
     matn, markup = render_togarak_card(teacher_key)
@@ -654,7 +654,7 @@ def save_togarak_selected_day(call):
     matn, markup = render_togarak_card(teacher_key)
     bot.send_message(call.message.chat.id, f"✅ <b>Hafta kuni saqlandi!</b>\n\n" + matn, reply_markup=markup, parse_mode="HTML")
 
-# ==================== TUGMALAR VA MENYULAR ====================
+# ==================== TARTIBLANGAN MENYULAR VA TUGMALAR ====================
 
 def get_role_choice_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -693,46 +693,38 @@ def get_admin_keyboard():
     return markup
 
 def get_teacher_keyboard():
+    """O'qituvchi uchun to'liq va tartibli menyu (📅 Mening darslarim 1-o'rinda)"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    b1 = types.KeyboardButton("📅 Mening darslarim")  # O'qituvchi uchun to'g'rilangan tugma
+    b1 = types.KeyboardButton("📅 Mening darslarim")
     b2 = types.KeyboardButton("⏰ Haftalik yuklamam")
     b3 = types.KeyboardButton("🎨 To'garaklarim")
-    b4 = types.KeyboardButton("👨‍👩‍👧 Farzandlarim")
-    b5 = types.KeyboardButton("🎮 Zukko O‘yinlar")
-    b6 = types.KeyboardButton("🏆 Maktab Reytingi")
-    b7 = types.KeyboardButton("📚 E-kutubxona")
-    b8 = types.KeyboardButton("✏️ Dars kunini to'g'irlash")
-    b9 = types.KeyboardButton("🎒 Sinf jadvali")
-    b10 = types.KeyboardButton("💡 Metodik AI yordamchi")
-    b11 = types.KeyboardButton("🔄 Yangilash")
-    b12 = types.KeyboardButton("✍️ Talab va takliflar")
-    b13 = types.KeyboardButton("🏠 Bosh sahifa")
+    b4 = types.KeyboardButton("🎒 Sinf jadvali")
+    b5 = types.KeyboardButton("💡 Metodik AI yordamchi")
+    b6 = types.KeyboardButton("📚 E-kutubxona")
+    b7 = types.KeyboardButton("✏️ Dars kunini to'g'irlash")
+    b8 = types.KeyboardButton("🔄 Yangilash")
+    b9 = types.KeyboardButton("✍️ Talab va takliflar")
+    b10 = types.KeyboardButton("🏠 Bosh sahifa")
+    
     markup.add(b1, b2)
     markup.add(b3, b4)
     markup.add(b5, b6)
     markup.add(b7, b8)
     markup.add(b9, b10)
-    markup.add(b11, b12)
-    markup.add(b13)
     return markup
 
 def get_student_parent_keyboard():
+    """Ota-onalar uchun ixchamlashtirilgan qulay asosiy menyu"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     b1 = types.KeyboardButton("🎒 Farzandlarim darslari")
-    b2 = types.KeyboardButton("🎮 Zukko O‘yinlar")
-    b3 = types.KeyboardButton("🏆 Maktab Reytingi")
-    b4 = types.KeyboardButton("👨‍👩‍👧 Farzandlarni tahrirlash")
-    b5 = types.KeyboardButton("📚 E-kutubxona")
-    b6 = types.KeyboardButton("🎒 Sinf jadvali")
-    b7 = types.KeyboardButton("💡 Metodik AI yordamchi")
-    b8 = types.KeyboardButton("🔄 Yangilash")
-    b9 = types.KeyboardButton("✍️ Taklif bildirish")
-    b10 = types.KeyboardButton("🏠 Bosh sahifa")
-    markup.add(b1, b2)
+    b2 = types.KeyboardButton("💡 Metodik AI yordamchi")
+    b3 = types.KeyboardButton("🔄 Yangilash")
+    b4 = types.KeyboardButton("✍️ Taklif bildirish")
+    b5 = types.KeyboardButton("🏠 Bosh sahifa")
+    markup.add(b1)
+    markup.add(b2)
     markup.add(b3, b4)
-    markup.add(b5, b6)
-    markup.add(b7, b8)
-    markup.add(b9, b10)
+    markup.add(b5)
     return markup
 
 def get_days_inline_keyboard(prefix="day_view"):
@@ -744,46 +736,61 @@ def get_days_inline_keyboard(prefix="day_view"):
     markup.add(types.InlineKeyboardButton("🏠 Bosh sahifaga qaytish", callback_data="go_home_inline"))
     return markup
 
-# ==================== START VA BOSH SAHIFA (QAT'IY QULFLANGAN) ====================
+# ==================== START VA BOSH SAHIFA (IKONKA VA QULFLAR) ====================
 
 @bot.message_handler(commands=['start'])
-@bot.message_handler(func=lambda msg: msg.text in ["🏠 Bosh sahifa", "🏠 Bosh sahifaga qaytish"])
+@bot.message_handler(func=lambda msg: msg.text in [
+    "🏠 Bosh sahifa", 
+    "🏠 Bosh sahifaga qaytish", 
+    "🔄 Yangilash", 
+    "/start"
+])
 def handle_start(message):
-    uid = message.from_user.id
+    uid = message.chat.id
     if uid in USER_STATES:
         del USER_STATES[uid]
     
     database.update_activity(uid, message.from_user.first_name)
     role, u_data = get_user_role_and_data(uid)
     
+    # 1. BOSH ADMIN KABINETI
     if role == "admin":
         admin_name = u_data.get("full_name") or message.from_user.first_name or "Jasurbek aka"
-        bot.send_message(
-            message.chat.id,
-            f"👑 <b>Assalomu alaykum, Bosh Admin {admin_name}!</b>\n"
-            f"80-Maktab boshqaruv markazidasiz. Barcha tizimlar to‘liq nazoratingizda.",
-            reply_markup=get_admin_keyboard()
+        text = (
+            f"👑 <b>80-MAKTAB BOSHQARUV MARKAZI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Bosh Admin:</b> {admin_name}\n"
+            f"📌 <i>Barcha tizimlar to‘liq nazoratingizda.</i>"
         )
+        bot.send_message(message.chat.id, text, reply_markup=get_admin_keyboard())
         return
         
+    # 2. O'QITUVCHI KABINETI (Yozuv taxtasi va ustoz ikonkasi)
     if role == "teacher":
         t_name = u_data.get("teacher_name") or u_data.get("full_name") or "Ustoz"
-        bot.send_message(
-            message.chat.id,
-            f"👨‍🏫 <b>Assalomu alaykum, {t_name}!</b>\n"
-            f"80-maktab 'Ustoz AI' shaxsiy kabinetingizdasiz.",
-            reply_markup=get_teacher_keyboard()
+        text = (
+            f"🧑‍🏫 📋 📐 <b>80-MAKTAB USTOZLAR KABINETI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👨‍🏫 <b>Ustoz:</b> <b>{t_name}</b>\n"
+            f"💼 <i>Darslaringiz, to‘garaklaringiz va AI yordamchingiz tayyor.</i>\n\n"
+            f"👇 <i>Kerakli bo‘limni tanlang:</i>"
         )
+        bot.send_message(message.chat.id, text, reply_markup=get_teacher_keyboard())
         return
 
+    # 3. O'QUVCHI / OTA-ONA KABINETI (Sumka ko'targan bolacha ikonkasi)
     if role in ["student", "student_parent"]:
-        bot.send_message(
-            message.chat.id,
-            f"🎒 <b>Assalomu alaykum!</b>\n80-Maktab ta’lim va Zukko O‘yinlar portaliga xush kelibsiz.",
-            reply_markup=get_student_parent_keyboard()
+        text = (
+            f"🎒 👦 📚 ✏️ <b>80-MAKTAB O‘QUV VA ZUKKO PORTALI</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Assalomu alaykum!\n"
+            f"Farzandingiz darslari, intellektual o‘yinlar va kutubxona xizmatingizda.\n\n"
+            f"👇 <i>«🎒 Farzandlarim darslari» tugmasini bosing:</i>"
         )
+        bot.send_message(message.chat.id, text, reply_markup=get_student_parent_keyboard())
         return
 
+    # 4. MUTLAQO YANGI FOYDALANUVCHI
     bot.send_message(
         message.chat.id,
         "🏫 <b>80-umumiy o‘rta ta’lim maktabi «Ustoz AI» tizimiga xush kelibsiz!</b>\n\n"
@@ -872,7 +879,84 @@ def handle_admin_rej(call):
     bot.edit_message_text("❌ So‘rov rad etildi.", call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id)
 
-# ==================== O'QUVCHI / OTA-ONA (1-7 FARZAND) ====================
+# ==================== O'QUVCHI / OTA-ONA KABINETI VA ICHKI BO'LIMLARI ====================
+
+def get_parent_inner_hub_keyboard():
+    """«Farzandlarim darslari» ichida ochiladigan barcha qulay bo'limlar"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    b1 = types.InlineKeyboardButton("🎮 Zukko O‘yinlar", callback_data="subm_games")
+    b2 = types.InlineKeyboardButton("🏆 Maktab Reytingi", callback_data="subm_rating")
+    b3 = types.InlineKeyboardButton("🎒 Sinf jadvali", callback_data="subm_class_sched")
+    b4 = types.InlineKeyboardButton("📚 E-kutubxona", callback_data="subm_lib")
+    b5 = types.InlineKeyboardButton("👨‍👩‍👧 Farzandlarni tahrirlash", callback_data="subm_edit_family")
+    b6 = types.InlineKeyboardButton("🏠 Bosh sahifa", callback_data="go_home_inline")
+    markup.add(b1, b2)
+    markup.add(b3, b4)
+    markup.add(b5)
+    markup.add(b6)
+    return markup
+
+@bot.message_handler(func=lambda msg: msg.text in ["🎒 Farzandlarim darslari", "🎒 Farzandlarim"])
+def handle_children_lessons(message):
+    uid_str = str(message.chat.id)
+    f_data = load_json_data(FAMILY_FILE, {})
+    children = f_data.get(uid_str, {}).get("children", [])
+    
+    if not children:
+        text, markup = render_family_card(message.chat.id)
+        bot.send_message(message.chat.id, "⚠️ <i>Siz hali birorta ham farzand qo‘shmadingiz. Iltimos, farzandingizni qo‘shing:</i>\n\n" + text, reply_markup=markup, parse_mode="HTML")
+        return
+        
+    now_day = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Dushanba"][datetime.now(UZ_TZ).weekday()]
+    z_data = load_json_data(ZVONOK_FILE, DEFAULT_BELL_SCHEDULE)
+    rejim = "☀️ Yozgi rejim" if z_data.get("rejim") == "yozgi" else "❄️ Qishki rejim"
+    
+    text = (
+        f"🎒 👦 <b>FARZANDLARINGIZ BUGUNGI DARSLARI ({now_day.upper()}):</b>\n"
+        f"📌 <i>Qo‘ng‘iroqlar tartibi: {rejim}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+    teachers = database.get_teachers_list()
+    for ch in children:
+        text += f"👤 <b>{ch['name']} ({ch['class']} sinf):</b>\n"
+        lines = []
+        for p in range(1, 7):
+            for t in teachers:
+                for e in t.get("schedule", {}).get(now_day, {}).get(str(p), []):
+                    if e.get("class", "").strip().upper() == ch['class'].strip().upper():
+                        lines.append(f"  • {p}-dars ({get_bell_time(1, p)}): <b>{e.get('subject', 'Dars')}</b> ({t['name']})")
+                        break
+        text += ("\n".join(lines) if lines else "  <i>Bugun darslar yo‘q.</i>") + "\n\n"
+        
+    text += "━━━━━━━━━━━━━━━━━━━━\n👇 <i>Kerakli qo‘shimcha bo‘limni tanlang:</i>"
+    bot.send_message(message.chat.id, text, reply_markup=get_parent_inner_hub_keyboard(), parse_mode="HTML")
+
+# Ichki bo'limlarning callback query'lari
+@bot.callback_query_handler(func=lambda call: call.data == "subm_games")
+def handle_subm_games(call):
+    show_games_hub(call.message.chat.id, call.from_user.id)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "subm_rating")
+def handle_subm_rating(call):
+    handle_leaderboard_msg(call.message)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "subm_class_sched")
+def handle_subm_class_sched(call):
+    handle_view_class_schedule(call.message)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "subm_lib")
+def handle_subm_lib(call):
+    handle_lib_open(call.message)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "subm_edit_family")
+def handle_subm_edit_fam(call):
+    text, markup = render_family_card(call.from_user.id)
+    bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="HTML")
+    bot.answer_callback_query(call.id)
 
 def render_family_card(user_id):
     f_data = load_json_data(FAMILY_FILE, {})
@@ -898,7 +982,7 @@ def render_family_card(user_id):
 
 @bot.message_handler(func=lambda msg: msg.text in ["🎒 O‘quvchi / Ota-ona", "👨‍👩‍👧 Farzandlarim", "👨‍👩‍👧 Farzandlarni tahrirlash"])
 def handle_family_main(message):
-    text, markup = render_family_card(message.from_user.id)
+    text, markup = render_family_card(message.chat.id)
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "fam_add_child")
@@ -941,7 +1025,7 @@ def handle_fam_confirm(call):
         if user and user.get("role") == "teacher":
             bot.send_message(call.message.chat.id, "✅ Farzandlaringiz tasdiqlandi!", reply_markup=get_teacher_keyboard())
         else:
-            bot.send_message(call.message.chat.id, "🎉 Kabinetingiz to‘liq tayyor! Endi Zukko O‘yinlar o‘ynashingiz mumkin.", reply_markup=get_student_parent_keyboard())
+            bot.send_message(call.message.chat.id, "🎉 Kabinetingiz to‘liq tayyor! Endi darslar va o‘yinlardan foydalanishingiz mumkin.", reply_markup=get_student_parent_keyboard())
     else:
         bot.answer_callback_query(call.id, "Avval kamida 1 nafar farzand qo‘shing!", show_alert=True)
 
@@ -973,19 +1057,18 @@ def handle_fam_back(call):
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
     bot.answer_callback_query(call.id)
 
-# ==================== 🎮 ZUKKO O'YINLAR (22 DAQIQA VA RANGLI HUB) ====================
+# ==================== 🎮 ZUKKO O'YINLAR ====================
 
-@bot.message_handler(func=lambda msg: msg.text == "🎮 Zukko O‘yinlar")
-def handle_games_entry(message):
-    uid_str = str(message.from_user.id)
+def show_games_hub(chat_id, user_id):
+    uid_str = str(user_id)
     f_data = load_json_data(FAMILY_FILE, {})
     children = f_data.get(uid_str, {}).get("children", [])
     
     if not children:
         bot.send_message(
-            message.chat.id,
+            chat_id,
             "⚠️ <b>O‘yin o‘ynash uchun avval kamida 1 nafar farzand kiritilgan bo‘lishi kerak.</b>\n\n"
-            "Iltimos, «👨‍👩‍👧 Farzandlarim» tugmasi orqali bolangizni qo‘shing."
+            "Iltimos, «🎒 Farzandlarim darslari» bo‘limiga kirib bolangizni qo‘shing."
         )
         return
         
@@ -999,12 +1082,16 @@ def handle_games_entry(message):
     markup.add(types.InlineKeyboardButton("🏠 Bosh sahifa", callback_data="go_home_inline"))
     
     bot.send_message(
-        message.chat.id,
+        chat_id,
         "🎮 <b>ZUKKO BILIMDON O‘YINLAR MAYDONI:</b>\n\n"
         "🌈 <i>Hozir kim o‘ynamoqchi? O‘z ismingizni tanlang:</i>",
         reply_markup=markup,
         parse_mode="HTML"
     )
+
+@bot.message_handler(func=lambda msg: msg.text in ["🎮 Zukko O‘yinlar", "🎮 Zukko O'yinlar"])
+def handle_games_entry(message):
+    show_games_hub(message.chat.id, message.from_user.id)
 
 def render_child_game_hub(uid_str, ch_idx):
     rem_sec, is_exhausted, ch = get_child_timer_status(uid_str, ch_idx, register_activity=False)
@@ -1424,7 +1511,7 @@ def get_leaderboard_text():
     text += "━━━━━━━━━━━━━━━━━━━━\n<i>Jonli maktab reytingi</i>"
     return text
 
-@bot.message_handler(func=lambda msg: msg.text == "🏆 Maktab Reytingi")
+@bot.message_handler(func=lambda msg: msg.text in ["🏆 Maktab Reytingi", "🏆 Maktab reytingi"])
 def handle_leaderboard_msg(message):
     bot.send_message(message.chat.id, get_leaderboard_text(), parse_mode="HTML")
 
@@ -1432,7 +1519,7 @@ def handle_leaderboard_msg(message):
 
 @bot.message_handler(func=lambda msg: msg.text in ["🎒 Sinf jadvali", "🎒 Sinf dars jadvallari"])
 def handle_view_class_schedule(message):
-    database.update_activity(message.from_user.id)
+    database.update_activity(message.chat.id)
     bot.send_message(
         message.chat.id,
         "🎒 <b>Qaysi sinf dars jadvali kerak?</b>\nKerakli parallel sinfni tanlang:",
@@ -1550,10 +1637,11 @@ def format_week_schedule(teacher_name):
     text += f"━━━━━━━━━━━━━━━━━━━━\n⭐ <b>Haftalik darslar: {tot} soat</b>"
     return text
 
+# O'qituvchi «📅 Mening darslarim» tugmasi
 @bot.message_handler(func=lambda msg: msg.text in ["📅 Mening darslarim", "📅 Dars jadvalim"])
 def handle_teacher_schedule(message):
-    database.update_activity(message.from_user.id)
-    user = database.get_user(message.from_user.id)
+    database.update_activity(message.chat.id)
+    user = database.get_user(message.chat.id)
     t_name = user["teacher_name"] if user else "Boboev J"
     bot.send_message(message.chat.id, f"📅 <b>{t_name}</b>, qaysi kungi jadvalni ko'rasiz?", reply_markup=get_days_inline_keyboard("day_view"))
 
@@ -1568,8 +1656,8 @@ def handle_day_view(call):
 
 @bot.message_handler(func=lambda msg: msg.text == "⏰ Haftalik yuklamam")
 def handle_teacher_workload(message):
-    database.update_activity(message.from_user.id)
-    user = database.get_user(message.from_user.id)
+    database.update_activity(message.chat.id)
+    user = database.get_user(message.chat.id)
     t_name = user["teacher_name"] if user else "Boboev J"
     t = database.get_teacher_schedule(t_name)
     if not t:
@@ -1604,7 +1692,7 @@ def handle_teacher_workload(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "✏️ Dars kunini to'g'irlash")
 def handle_edit_day_prompt(message):
-    user = database.get_user(message.from_user.id)
+    user = database.get_user(message.chat.id)
     if not user:
         return
     bot.send_message(
@@ -1628,38 +1716,11 @@ def handle_edit_day_callback(call):
     bot.send_message(call.message.chat.id, msg_text)
     bot.answer_callback_query(call.id)
 
-@bot.message_handler(func=lambda msg: msg.text == "🎒 Farzandlarim darslari")
-def handle_children_lessons(message):
-    uid_str = str(message.from_user.id)
-    f_data = load_json_data(FAMILY_FILE, {})
-    children = f_data.get(uid_str, {}).get("children", [])
-    if not children:
-        bot.send_message(message.chat.id, "Siz hali birorta ham farzand qo‘shmadingiz.")
-        return
-        
-    now_day = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Dushanba"][datetime.now(UZ_TZ).weekday()]
-    z_data = load_json_data(ZVONOK_FILE, DEFAULT_BELL_SCHEDULE)
-    rejim = "☀️ Yozgi rejim" if z_data.get("rejim") == "yozgi" else "❄️ Qishki rejim"
-    
-    text = f"🎒 <b>FARZANDLARINGIZ DARSLARI ({now_day.upper()}):</b>\n📌 <i>{rejim}</i>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    teachers = database.get_teachers_list()
-    for ch in children:
-        text += f"👤 <b>{ch['name']} ({ch['class']} sinf):</b>\n"
-        lines = []
-        for p in range(1, 7):
-            for t in teachers:
-                for e in t.get("schedule", {}).get(now_day, {}).get(str(p), []):
-                    if e.get("class", "").strip().upper() == ch['class'].strip().upper():
-                        lines.append(f"  • {p}-dars ({get_bell_time(1, p)}): <b>{e.get('subject', 'Dars')}</b> ({t['name']})")
-                        break
-        text += ("\n".join(lines) if lines else "  <i>Bugun darslar yo‘q.</i>") + "\n\n"
-    bot.send_message(message.chat.id, text, parse_mode="HTML")
-
 # ==================== ADMIN BUYRUQLARI VA HISOBOTLAR ====================
 
 @bot.message_handler(func=lambda msg: msg.text == "👥 O'qituvchilar holati")
 def handle_admin_teachers_state(message):
-    admin = database.get_user(message.from_user.id)
+    admin = database.get_user(message.chat.id)
     if not admin or admin["role"] != "admin":
         return
     users = database.get_all_connected_users()
@@ -1674,7 +1735,7 @@ def handle_admin_teachers_state(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "📊 Maktab umumiy hisoboti")
 def handle_admin_total_report(message):
-    admin = database.get_user(message.from_user.id)
+    admin = database.get_user(message.chat.id)
     if not admin or admin["role"] != "admin":
         return
     t_all = database.get_teachers_list()
@@ -1690,7 +1751,7 @@ def handle_admin_total_report(message):
 
 @bot.message_handler(func=lambda msg: msg.text == "📈 Jonli statistika")
 def handle_admin_stats(message):
-    admin = database.get_user(message.from_user.id)
+    admin = database.get_user(message.chat.id)
     if not admin or admin["role"] != "admin":
         return
     
@@ -1729,7 +1790,7 @@ def handle_admin_stats(message):
 # 2 BOSQICHLI XABAR YUBORISH (BROADCAST VA RECALL)
 @bot.message_handler(func=lambda msg: msg.text == "📢 Xabar yuborish (Filtr)")
 def handle_broadcast_menu(message):
-    admin = database.get_user(message.from_user.id)
+    admin = database.get_user(message.chat.id)
     if not admin or admin["role"] != "admin":
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -1824,14 +1885,14 @@ def handle_bc_recall(call):
 
 @bot.message_handler(func=lambda msg: msg.text == "📥 Excel jadval yuklash")
 def handle_excel_prompt(message):
-    admin = database.get_user(message.from_user.id)
+    admin = database.get_user(message.chat.id)
     if not admin or admin["role"] != "admin":
         return
     bot.send_message(message.chat.id, "📥 Yangi dars jadvali Excel faylini (.xlsx) fayl ko'rinishida yuboring.")
 
 @bot.message_handler(func=lambda msg: msg.text == "🎁 O‘quvchini mukofotlash")
 def handle_admin_reward(message):
-    user = database.get_user(message.from_user.id)
+    user = database.get_user(message.chat.id)
     if not user or user.get("role") != "admin":
         return
     f_data = load_json_data(FAMILY_FILE, {})
@@ -1883,7 +1944,7 @@ def handle_grant_execute(call):
 
 @bot.message_handler(func=lambda msg: msg.text == "⚙️ Qo‘ng‘iroqlar sozlamasi" or msg.text == "/admin_soatlar")
 def handle_admin_bell_menu(message):
-    user = database.get_user(message.from_user.id)
+    user = database.get_user(message.chat.id)
     if not user or user.get("role") != "admin":
         return
     data = load_json_data(ZVONOK_FILE, DEFAULT_BELL_SCHEDULE)
@@ -1908,7 +1969,7 @@ def process_bell_switch(call):
 
 @bot.message_handler(func=lambda msg: msg.text == "📚 Kitob yuklash (PDF)")
 def handle_upload_book_menu(message):
-    user = database.get_user(message.from_user.id)
+    user = database.get_user(message.chat.id)
     if not user or user.get("role") != "admin":
         return
     markup = types.InlineKeyboardMarkup(row_width=4)
@@ -1978,16 +2039,15 @@ def handle_readlesson_call(call):
     bot.send_message(call.message.chat.id, f"📖 <b>{p[1]}-sinf {p[2]}</b>: qaysi dars kerak? Masalan: <code>7-dars</code> deb yozing:")
     bot.answer_callback_query(call.id)
 
-# ==================== METODIK AI YORDAMCHI (SOF O'ZBEKCHA + RASM + WORD EKSPORT) ====================
+# ==================== METODIK AI YORDAMCHI (WORD VA 4K RASM) ====================
 
 def create_lesson_plan_docx(title, plan_text, img_url=None):
-    """Word (.docx) faylini tayyorlab BytesIO xotira oqimida qaytaradi"""
+    """Word (.docx) faylini tayyorlab xotira oqimida qaytaradi"""
     if not DOCX_AVAILABLE:
         return None
         
     doc = docx.Document()
     
-    # Hujjat sarlavhasi
     h = doc.add_paragraph()
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
     hr = h.add_run("80-UMUMIY O‘RTA TA’LIM MAKTABI\n")
@@ -2000,7 +2060,6 @@ def create_lesson_plan_docx(title, plan_text, img_url=None):
     t_run.font.size = Pt(16)
     t_run.font.color.rgb = RGBColor(40, 116, 166)
 
-    # Rasmni yuklab olish va Word'ga joylash
     if img_url:
         try:
             req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -2019,7 +2078,6 @@ def create_lesson_plan_docx(title, plan_text, img_url=None):
 
     doc.add_paragraph("\n" + "—" * 45 + "\n")
 
-    # Dars matnini bo'limma-bo'lim terish
     lines = plan_text.split("\n")
     for line in lines:
         line_s = line.strip()
@@ -2034,7 +2092,6 @@ def create_lesson_plan_docx(title, plan_text, img_url=None):
             run = p.add_run(line_s)
             run.font.size = Pt(11)
 
-    # Imzo va sana qismi
     doc.add_paragraph("\n\n" + "—" * 45)
     f_p = doc.add_paragraph()
     f_p.add_run(f"Darsni o‘tdi: _____________________ (imzo)          Sana: {datetime.now(UZ_TZ).strftime('%d.%m.%Y')}")
@@ -2072,7 +2129,7 @@ def handle_feedback_request(message):
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
-    user = database.get_user(message.from_user.id)
+    user = database.get_user(message.chat.id)
     if not user or user.get("role") != "admin":
         return
     doc = message.document
@@ -2213,7 +2270,6 @@ def handle_all_states(message):
         )
         answer, err = generate_ai_response(prompt)
         if answer:
-            # Inglizcha qolgan so'zlarni tozalash
             replacements = {
                 "Warm-up": "Darsga kirish", "warm-up": "darsga kirish",
                 "Ice-breaker": "Qiziqarli savol", "Icebreaker": "Qiziqarli savol",
@@ -2224,7 +2280,6 @@ def handle_all_states(message):
             for eng, uz in replacements.items():
                 answer = answer.replace(eng, uz)
                 
-            # Keshga saqlash (foydalanuvchi xohlagan paytda Word qilib yuklab olishi uchun)
             plan_id = str(int(time.time())) + str(random.randint(10, 99))
             AI_LESSON_PLANS[plan_id] = {
                 "title": user_query,
@@ -2232,7 +2287,6 @@ def handle_all_states(message):
                 "img_url": img_url
             }
             
-            # Matn ostiga yuklab olish tugmasini qo'yish
             markup = types.InlineKeyboardMarkup(row_width=1)
             markup.add(types.InlineKeyboardButton("📥 Word (.docx) formatda yuklab olish", callback_data=f"dldocx_{plan_id}"))
             
@@ -2275,7 +2329,7 @@ def handle_all_states(message):
         bot.send_message(message.chat.id, "✅ Murojaatingiz ma'muriyatga yetkazildi.")
         return
 
-# ==================== WORD (.DOCX) YUKLAB OLISH HANDLERI ====================
+# ==================== WORD (.DOCX) YUKLAB OLISH ====================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dldocx_"))
 def handle_download_docx(call):
@@ -2311,7 +2365,7 @@ def handle_download_docx(call):
 @bot.message_handler(func=lambda msg: "yangilash" in msg.text.lower())
 def handle_universal_refresh(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    database.update_activity(message.from_user.id)
+    database.update_activity(message.chat.id)
     z_data = load_json_data(ZVONOK_FILE, DEFAULT_BELL_SCHEDULE)
     faol = "☀️ Yozgi rejim" if z_data.get("rejim") == "yozgi" else "❄️ Qishki rejim"
     c_time = datetime.now(UZ_TZ).strftime("%H:%M:%S")
@@ -2371,56 +2425,4 @@ def send_paced_reminders(is_morning=False):
             lines = []
             for p in range(1, 7):
                 for tc in teachers:
-                    for e in tc.get("schedule", {}).get(target_day, {}).get(str(p), []):
-                        if e.get("class", "").strip().upper() == ch['class'].strip().upper():
-                            lines.append(f"  • {p}-dars ({get_bell_time(1, p)}): {e.get('subject', 'Dars')} ({tc['name']})")
-                            break
-            msg += ("\n".join(lines) if lines else "  <i>Dars yo‘q.</i>") + "\n\n"
-        try:
-            bot.send_message(int(uid_str), msg)
-        except Exception:
-            pass
-        time.sleep(0.08)
-
-def reminder_scheduler():
-    s_m, s_e = "", ""
-    while True:
-        try:
-            now = datetime.now(UZ_TZ)
-            t_str = now.strftime("%Y-%m-%d")
-            if now.hour == 7 and 0 <= now.minute < 5 and s_m != t_str:
-                send_paced_reminders(is_morning=True)
-                s_m = t_str
-            if now.hour == 19 and 30 <= now.minute < 35 and s_e != t_str:
-                send_paced_reminders(is_morning=False)
-                s_e = t_str
-        except Exception:
-            pass
-        time.sleep(30)
-
-# --- UMUMIY ERKIN MATNLARGA AI JAVOBI ---
-@bot.message_handler(func=lambda msg: True)
-def handle_general_ai(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    prompt = (
-        "Sen 80-maktab 'Ustoz AI' aqlli pedagogik yordamchisisan. "
-        "Faqat o'zbek tilida, muloyim, aniq va samimiy javob ber:\n\n"
-        f"Savol: {message.text}"
-    )
-    ans, err = generate_ai_response(prompt)
-    if ans:
-        send_long_ai_message(message.chat.id, ans, message.message_id)
-    else:
-        bot.reply_to(message, f"⚠️ Xatolik: {err}\nMenyudan foydalanishingiz mumkin.")
-
-# ==================== ISHGA TUSHIRISH ====================
-
-if __name__ == "__main__":
-    try:
-        bot.remove_webhook()
-    except Exception:
-        pass
-    Thread(target=run_web, daemon=True).start()
-    Thread(target=reminder_scheduler, daemon=True).start()
-    print("80-maktab 'Ustoz AI' to'liq boshqaruv tizimi ishga tushdi...")
-    bot.infinity_polling(skip_pending=True)
+                    for e in tc.get("schedule", {}).get(target_day, {}).get(str(p), []
