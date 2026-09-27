@@ -2,3 +2,4 @@ pyTelegramBotAPI
 flask
 openpyxl
 google-generativeai
+python-docx
