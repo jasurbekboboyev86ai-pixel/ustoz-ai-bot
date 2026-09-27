@@ -10,13 +10,24 @@ import time
 import re
 import json
 import random
+import io
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 from flask import Flask
 import telebot
 from telebot import types
 import google.generativeai as genai
+
+# Word (.docx) yaratish kutubxonasi
+try:
+    import docx
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 import config
 import database
@@ -43,7 +54,6 @@ GEMINI_KEY = (
 cached_model = None
 
 def get_working_ai_model():
-    """Google API'dan mavjud modellarni avtomatik aniqlab ulaydi"""
     global cached_model
     if cached_model is not None:
         return cached_model
@@ -83,14 +93,13 @@ def get_working_ai_model():
             chosen_name,
             generation_config={"temperature": 0.85, "top_p": 0.95}
         )
-        print(f"✅ Gemini AI muvaffaqiyatli ulandi! Model: {chosen_name}")
+        print(f"✅ Gemini AI faollashtirildi! Model: {chosen_name}")
         return cached_model
     except Exception as e:
         print(f"AI Model ulashda xatolik: {e}")
         return None
 
 def generate_ai_response(prompt_text):
-    """Xatoliklarga chidamli AI javob qaytarish tizimi"""
     global cached_model
     if not GEMINI_KEY:
         return None, "API kalit (GEMINI_API_KEY) topilmadi. Render sozlamalarini tekshiring."
@@ -137,6 +146,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 USER_STATES = {}
 UZ_TZ = timezone(timedelta(hours=5))
 MAX_DAILY_GAME_SECONDS = 22 * 60  # Kuniga 22 daqiqa o'yin vaqti
+AI_LESSON_PLANS = {}  # Word fayl generatsiyasi uchun kesh
 
 # 3D Animatsiya havolalari
 STAR_3D_GIF = "https://media.giphy.com/media/26FPJGjhefSJuaRhu/giphy.gif"
@@ -180,13 +190,12 @@ if not os.path.exists(ZVONOK_FILE):
 def get_bell_time(smena, slot_num):
     data = load_json_data(ZVONOK_FILE, DEFAULT_BELL_SCHEDULE)
     rejim = data.get("rejim", "yozgi")
-    smena_str = str(smena)
-    slots = data[rejim].get(smena_str, [])
+    slots = data[rejim].get(str(smena), [])
     if 1 <= slot_num <= len(slots):
         return slots[slot_num - 1]
     return ""
 
-def send_long_ai_message(chat_id, text, reply_to_id=None):
+def send_long_ai_message(chat_id, text, reply_to_id=None, reply_markup=None):
     chunks = []
     while len(text) > 3900:
         split_idx = text.rfind("\n", 0, 3900)
@@ -197,15 +206,17 @@ def send_long_ai_message(chat_id, text, reply_to_id=None):
     if text:
         chunks.append(text)
     
+    last_idx = len(chunks) - 1
     for idx, chunk in enumerate(chunks):
         rep = reply_to_id if idx == 0 else None
+        markup = reply_markup if idx == last_idx else None
         try:
-            bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_to_message_id=rep)
+            bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_to_message_id=rep, reply_markup=markup)
         except Exception:
             clean = chunk.replace("*", "").replace("_", "").replace("`", "").replace("#", "")
-            bot.send_message(chat_id, clean, parse_mode=None, reply_to_message_id=rep)
+            bot.send_message(chat_id, clean, parse_mode=None, reply_to_message_id=rep, reply_markup=markup)
 
-# ==================== FOYDALANUVCHI ROLLARI VA QULFLASH ====================
+# ==================== FOYDALANUVCHI ROLLARI VA QAT'IY QULF ====================
 
 def save_user_role(uid, role, full_name=None, teacher_name=None):
     roles = load_json_data(USER_ROLES_FILE, {})
@@ -218,12 +229,9 @@ def save_user_role(uid, role, full_name=None, teacher_name=None):
     save_json_data(USER_ROLES_FILE, roles)
 
 def get_user_role_and_data(uid):
-    """Foydalanuvchi rolini hech qachon yo'qotmaydigan qat'iy tekshiruv"""
-    # 1. user_roles.json keshidan tekshirish
     roles_cache = load_json_data(USER_ROLES_FILE, {})
     u_cache = roles_cache.get(str(uid))
 
-    # 2. SQLite bazadan tekshirish
     try:
         db_user = database.get_user(uid)
         if db_user and db_user.get("role"):
@@ -233,7 +241,6 @@ def get_user_role_and_data(uid):
     except Exception:
         pass
 
-    # 3. Adminlar ro'yxatidan tekshirish
     try:
         admins = database.get_all_admins()
         if uid in admins:
@@ -242,17 +249,14 @@ def get_user_role_and_data(uid):
     except Exception:
         pass
 
-    # 4. Agar keshda bo'lsa
     if u_cache and u_cache.get("role"):
         return u_cache["role"], u_cache
 
-    # 5. Farzandlar bazasidan tekshirish
     f_data = load_json_data(FAMILY_FILE, {})
     if str(uid) in f_data and len(f_data[str(uid)].get("children", [])) > 0:
         save_user_role(uid, "student_parent")
         return "student_parent", {"role": "student_parent"}
 
-    # 6. Sinf obunalaridan tekshirish
     try:
         subs = database.get_user_subscriptions(uid)
         if subs:
@@ -466,7 +470,6 @@ def get_child_timer_status(uid_str, child_idx, register_activity=False):
     return rem_sec, is_exhausted, ch
 
 def render_star_shelf(yulduz):
-    """Oltin Yulduzlar Javoni (Vizual shkala: har 10 ta yulduzda to'ladi)"""
     level_stars = yulduz % 10
     shelf = " ".join(["⭐"] * level_stars + ["⚪"] * (10 - level_stars))
     return f"[ {shelf} ] ({level_stars}/10 ta ⭐)"
@@ -691,7 +694,7 @@ def get_admin_keyboard():
 
 def get_teacher_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    b1 = types.KeyboardButton("📅 Dars jadvalim")
+    b1 = types.KeyboardButton("📅 Mening darslarim")  # O'qituvchi uchun to'g'rilangan tugma
     b2 = types.KeyboardButton("⏰ Haftalik yuklamam")
     b3 = types.KeyboardButton("🎨 To'garaklarim")
     b4 = types.KeyboardButton("👨‍👩‍👧 Farzandlarim")
@@ -751,8 +754,6 @@ def handle_start(message):
         del USER_STATES[uid]
     
     database.update_activity(uid, message.from_user.first_name)
-    
-    # Qat'iy qulf: foydalanuvchi kimligini bazadan va keshdan tekshirish
     role, u_data = get_user_role_and_data(uid)
     
     if role == "admin":
@@ -783,7 +784,6 @@ def handle_start(message):
         )
         return
 
-    # Faqat birorta ham roli bo'lmagan yangi mehmon uchun chiqadi
     bot.send_message(
         message.chat.id,
         "🏫 <b>80-umumiy o‘rta ta’lim maktabi «Ustoz AI» tizimiga xush kelibsiz!</b>\n\n"
@@ -1550,7 +1550,7 @@ def format_week_schedule(teacher_name):
     text += f"━━━━━━━━━━━━━━━━━━━━\n⭐ <b>Haftalik darslar: {tot} soat</b>"
     return text
 
-@bot.message_handler(func=lambda msg: msg.text in ["📅 Dars jadvalim", "📅 Mening darslarim"])
+@bot.message_handler(func=lambda msg: msg.text in ["📅 Mening darslarim", "📅 Dars jadvalim"])
 def handle_teacher_schedule(message):
     database.update_activity(message.from_user.id)
     user = database.get_user(message.from_user.id)
@@ -1978,7 +1978,72 @@ def handle_readlesson_call(call):
     bot.send_message(call.message.chat.id, f"📖 <b>{p[1]}-sinf {p[2]}</b>: qaysi dars kerak? Masalan: <code>7-dars</code> deb yozing:")
     bot.answer_callback_query(call.id)
 
-# ==================== METODIK AI YORDAMCHI (SOF O'ZBEKCHA + RASM) ====================
+# ==================== METODIK AI YORDAMCHI (SOF O'ZBEKCHA + RASM + WORD EKSPORT) ====================
+
+def create_lesson_plan_docx(title, plan_text, img_url=None):
+    """Word (.docx) faylini tayyorlab BytesIO xotira oqimida qaytaradi"""
+    if not DOCX_AVAILABLE:
+        return None
+        
+    doc = docx.Document()
+    
+    # Hujjat sarlavhasi
+    h = doc.add_paragraph()
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    hr = h.add_run("80-UMUMIY O‘RTA TA’LIM MAKTABI\n")
+    hr.font.bold = True
+    hr.font.size = Pt(14)
+    hr.font.color.rgb = RGBColor(26, 82, 118)
+
+    t_run = h.add_run(f"DARS ISHLANMASI (KONSPEKT)\nMavzu: {title}\n")
+    t_run.font.bold = True
+    t_run.font.size = Pt(16)
+    t_run.font.color.rgb = RGBColor(40, 116, 166)
+
+    # Rasmni yuklab olish va Word'ga joylash
+    if img_url:
+        try:
+            req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+            img_data = urllib.request.urlopen(req, timeout=10).read()
+            img_stream = io.BytesIO(img_data)
+            doc.add_paragraph()
+            doc.add_picture(img_stream, width=Inches(5.5))
+            last_p = doc.paragraphs[-1]
+            last_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            caption = doc.add_paragraph(f"Ko‘rgazmali illyustratsiya: {title}")
+            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            caption.runs[0].font.italic = True
+            caption.runs[0].font.size = Pt(9.5)
+        except Exception as e:
+            print(f"Rasm yuklashda xatolik: {e}")
+
+    doc.add_paragraph("\n" + "—" * 45 + "\n")
+
+    # Dars matnini bo'limma-bo'lim terish
+    lines = plan_text.split("\n")
+    for line in lines:
+        line_s = line.strip()
+        if not line_s:
+            continue
+        p = doc.add_paragraph()
+        if line_s.startswith(("#", "•", "1.", "2.", "3.", "4.", "5.", "6.", "Dars", "Mavzu", "Maqsad")):
+            run = p.add_run(line_s.replace("#", "").strip())
+            run.font.bold = True
+            run.font.size = Pt(12)
+        else:
+            run = p.add_run(line_s)
+            run.font.size = Pt(11)
+
+    # Imzo va sana qismi
+    doc.add_paragraph("\n\n" + "—" * 45)
+    f_p = doc.add_paragraph()
+    f_p.add_run(f"Darsni o‘tdi: _____________________ (imzo)          Sana: {datetime.now(UZ_TZ).strftime('%d.%m.%Y')}")
+    f_p.runs[0].font.italic = True
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio
 
 @bot.message_handler(func=lambda msg: msg.text in ["💡 Metodik AI yordamchi", "💡 Savol-javob (AI)"])
 def handle_ai_prompt(message):
@@ -2113,15 +2178,15 @@ def handle_all_states(message):
             bot.reply_to(message, f"⚠️ Xatolik: {err}")
         return
 
-    # METODIK AI: MAVZUGA MOS RASM + SOF O'ZBEKCHA DARSLIK
+    # METODIK AI: MAVZUGA MOS RASM + SOF O'ZBEKCHA MATN + WORD YUKLASH TUGMASI
     if act == "ai_query":
         del USER_STATES[uid]
         user_query = message.text.strip()
         
-        # 1. Mavzuga mos illyustratsiya rasm yuborish
+        # 1. 4K Illyustratsiya rasm generatsiyasi
         bot.send_chat_action(message.chat.id, 'upload_photo')
         clean_q = re.sub(r'[^\w\s]', '', user_query)
-        img_prompt = urllib.parse.quote(f"high quality realistic educational illustration of {clean_q}, classroom, science, vibrant colors, 4k resolution, textbook style")
+        img_prompt = urllib.parse.quote(f"high quality realistic educational illustration of {clean_q}, classroom, science, colorful, 4k resolution, textbook style")
         img_url = f"https://image.pollinations.ai/prompt/{img_prompt}?width=800&height=450&nologo=true"
         
         try:
@@ -2148,7 +2213,7 @@ def handle_all_states(message):
         )
         answer, err = generate_ai_response(prompt)
         if answer:
-            # Inglizcha so'zlar qolib ketmasligi uchun tozalash
+            # Inglizcha qolgan so'zlarni tozalash
             replacements = {
                 "Warm-up": "Darsga kirish", "warm-up": "darsga kirish",
                 "Ice-breaker": "Qiziqarli savol", "Icebreaker": "Qiziqarli savol",
@@ -2158,7 +2223,20 @@ def handle_all_states(message):
             }
             for eng, uz in replacements.items():
                 answer = answer.replace(eng, uz)
-            send_long_ai_message(message.chat.id, answer, message.message_id)
+                
+            # Keshga saqlash (foydalanuvchi xohlagan paytda Word qilib yuklab olishi uchun)
+            plan_id = str(int(time.time())) + str(random.randint(10, 99))
+            AI_LESSON_PLANS[plan_id] = {
+                "title": user_query,
+                "text": answer,
+                "img_url": img_url
+            }
+            
+            # Matn ostiga yuklab olish tugmasini qo'yish
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("📥 Word (.docx) formatda yuklab olish", callback_data=f"dldocx_{plan_id}"))
+            
+            send_long_ai_message(message.chat.id, answer, message.message_id, reply_markup=markup)
         else:
             bot.reply_to(message, f"⚠️ AI javob berishda xatolik yuz berdi: {err}\n\nIltimos, qaytadan urinib ko'ring.")
         return
@@ -2196,6 +2274,37 @@ def handle_all_states(message):
                 pass
         bot.send_message(message.chat.id, "✅ Murojaatingiz ma'muriyatga yetkazildi.")
         return
+
+# ==================== WORD (.DOCX) YUKLAB OLISH HANDLERI ====================
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dldocx_"))
+def handle_download_docx(call):
+    plan_id = call.data.replace("dldocx_", "")
+    plan_data = AI_LESSON_PLANS.get(plan_id)
+    
+    if not plan_data:
+        bot.answer_callback_query(call.id, "Fayl eskirgan yoki topilmadi. Qaytadan dars so'rang.", show_alert=True)
+        return
+        
+    bot.answer_callback_query(call.id, "Word hujjati tayyorlanmoqda... ⏳")
+    bot.send_chat_action(call.message.chat.id, 'upload_document')
+    
+    title = plan_data["title"]
+    text = plan_data["text"]
+    img_url = plan_data["img_url"]
+    
+    docx_stream = create_lesson_plan_docx(title, text, img_url)
+    if docx_stream:
+        clean_name = re.sub(r'[^\w\s-]', '', title).strip().replace(" ", "_")[:35]
+        file_name = f"Dars_ishlanmasi_{clean_name}.docx"
+        docx_stream.name = file_name
+        bot.send_document(
+            call.message.chat.id, 
+            docx_stream, 
+            caption=f"📄 <b>Dars ishlanmasi Word hujjati tayyor!</b>\n\nMavzu: <i>{title}</i>\n🖨 <i>Chop etish va tahrirlash uchun tayyor.</i>"
+        )
+    else:
+        bot.send_message(call.message.chat.id, "⚠️ Word fayl yaratish kutubxonasi serverda mavjud emas. Matnni Telegramdan nusxalab olishingiz mumkin.")
 
 # ==================== 🔄 YANGILASH VA ESLATMALAR ====================
 
